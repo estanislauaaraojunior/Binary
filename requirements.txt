@@ -16,3 +16,7 @@ torch>=2.0.0
 # Dados
 pandas>=2.1.0
 numpy>=1.26.0
+
+# Firebase (opcional — ativar USE_FIREBASE=True em config.py)
+# Gerencia Realtime Database (ticks), Firestore (operações) e Storage (modelos)
+firebase-admin>=6.3.0

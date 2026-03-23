@@ -106,6 +106,27 @@ OPERATIONS_LOG   = "operacoes_log.csv"
 DATASET_CSV      = "dataset.csv"
 
 # ─────────────────────────────────────────────────────────────────
+#  Firebase — banco de dados em nuvem (opcional)
+# ─────────────────────────────────────────────────────────────────
+# False → bot funciona exatamente como antes (apenas arquivos locais)
+# True  → envia ticks ao Realtime DB, operações ao Firestore e
+#         faz upload dos modelos ao Storage após o treino
+USE_FIREBASE = True
+
+# Caminho para a chave de service account do Firebase
+# Baixe em: Firebase Console → Configurações do Projeto → Contas de serviço
+#           → Gerar nova chave privada
+# IMPORTANTE: nunca commitar este arquivo (já está no .gitignore)
+FIREBASE_CRED_PATH = "serviceAccountKey.json"
+
+# Projeto: standeriv
+# URL do Realtime Database (habilite em: Build → Realtime Database → Criar)
+FIREBASE_DB_URL  = "https://standeriv-default-rtdb.firebaseio.com"
+
+# Bucket do Storage
+FIREBASE_BUCKET  = "standeriv.firebasestorage.app"
+
+# ─────────────────────────────────────────────────────────────────
 #  Temporal Fusion Transformer (TFT) — nível hedge fund
 # ─────────────────────────────────────────────────────────────────
 

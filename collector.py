@@ -21,7 +21,7 @@ import sys
 import websocket
 from datetime import datetime
 
-from config import APP_ID, TOKEN, SYMBOL, TICKS_CSV, TICK_SPIKE_THRESHOLD
+from config import APP_ID, TOKEN, SYMBOL, TICKS_CSV, TICK_SPIKE_THRESHOLD, USE_FIREBASE
 
 WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
 
@@ -96,6 +96,11 @@ def on_message(ws, message: str) -> None:
 
         with open(TICKS_CSV, "a", newline="") as f:
             csv.writer(f).writerow([epoch, dt_str, SYMBOL, price])
+
+        # Firebase: envia tick ao Realtime Database em background
+        if USE_FIREBASE:
+            from firebase_client import push_tick_async
+            push_tick_async(SYMBOL, epoch, price, dt_str)
 
         # Exibe contador na mesma linha para não poluir o terminal
         print(

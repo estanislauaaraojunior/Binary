@@ -16,6 +16,7 @@ from config import (
     MAX_CONSEC_LOSSES, OPERATIONS_LOG, ADX_MIN,
     PAUSE_BASE_SEC, PAUSE_SCALE_FACTOR, RESUME_ON_WIN,
     DRIFT_WINDOW, DRIFT_WIN_RATE_MIN,
+    USE_FIREBASE,
 )
 
 
@@ -174,10 +175,12 @@ class RiskManager:
         )
         market_condition = "trending" if indicators.get("adx", 0) >= ADX_MIN else "lateral"
 
+        now_iso = datetime.now().isoformat()
+
         with open(OPERATIONS_LOG, "a", newline="") as f:
             writer = csv.writer(f)
             writer.writerow([
-                datetime.now().isoformat(),
+                now_iso,
                 symbol, direction, stake, duration,
                 result_str, profit,
                 balance_before, self.balance,
@@ -191,6 +194,32 @@ class RiskManager:
                 self._consec_losses,
                 drawdown_pct, win_rate_recent, market_condition,
             ])
+
+        # Firebase: salva operação no Firestore em background
+        if USE_FIREBASE:
+            from firebase_client import add_operation_async
+            add_operation_async({
+                "timestamp":       now_iso,
+                "symbol":          symbol,
+                "direction":       direction,
+                "stake":           stake,
+                "duration":        duration,
+                "result":          result_str,
+                "profit":          profit,
+                "balance_before":  balance_before,
+                "balance_after":   self.balance,
+                "ema9":            indicators.get("ema9"),
+                "ema21":           indicators.get("ema21"),
+                "rsi":             indicators.get("rsi"),
+                "adx":             indicators.get("adx"),
+                "macd_hist":       indicators.get("macd_hist"),
+                "ai_confidence":   indicators.get("ai_confidence"),
+                "ai_score":        indicators.get("ai_score"),
+                "consec_losses":   self._consec_losses,
+                "drawdown_pct":    drawdown_pct,
+                "win_rate_recent": win_rate_recent,
+                "market_condition": market_condition,
+            })
 
     # ──────────────────────────────────────────────
     #  Interno
