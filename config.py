@@ -3,14 +3,19 @@
 #  Edite APENAS este arquivo para ajustar o comportamento.
 # ============================================================
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()  # carrega variáveis de .env (ignorado se não existir)
+
 # ----- Conta -----
 # True  → opera na conta DEMO (seguro — dinheiro virtual)
 # False → opera na conta REAL (requer TOKEN de conta real + confirmação no terminal)
 DEMO_MODE = True
 
 # ----- Conexão -----
-APP_ID = "1089"            # app_id público para testes; substitua pelo seu
-TOKEN  = "sW9c9VzCcIr6Rtu" # crie em: developers.deriv.com (permissões: trade + read)
+APP_ID = os.environ.get("DERIV_APP_ID", "1089")
+TOKEN  = os.environ["DERIV_TOKEN"]    # defina em .env — crie em: developers.deriv.com
 
 # ----- Instrumento -----
 SYMBOL        = "R_100"  # índice sintético 24/7 (sem impacto de notícias)
@@ -117,14 +122,14 @@ USE_FIREBASE = True
 # Baixe em: Firebase Console → Configurações do Projeto → Contas de serviço
 #           → Gerar nova chave privada
 # IMPORTANTE: nunca commitar este arquivo (já está no .gitignore)
-FIREBASE_CRED_PATH = "serviceAccountKey.json"
+FIREBASE_CRED_PATH = os.environ.get("FIREBASE_CRED_PATH", "serviceAccountKey.json")
 
 # Projeto: standeriv
 # URL do Realtime Database (habilite em: Build → Realtime Database → Criar)
-FIREBASE_DB_URL  = "https://standeriv-default-rtdb.firebaseio.com"
+FIREBASE_DB_URL  = os.environ.get("FIREBASE_DB_URL", "")
 
 # Bucket do Storage
-FIREBASE_BUCKET  = "standeriv.firebasestorage.app"
+FIREBASE_BUCKET  = os.environ.get("FIREBASE_BUCKET", "")
 
 # ─────────────────────────────────────────────────────────────────
 #  Temporal Fusion Transformer (TFT) — nível hedge fund

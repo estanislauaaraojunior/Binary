@@ -1,6 +1,9 @@
 # Dependências do Deriv Trading Bot
 # Instalação: pip install -r requirements.txt
 
+# Variáveis de ambiente (carrega .env automaticamente)
+python-dotenv>=1.0.0
+
 # WebSocket client (conexão com a API Deriv)
 websocket-client>=1.6.0
 
