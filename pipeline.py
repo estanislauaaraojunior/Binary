@@ -491,6 +491,12 @@ class _CollectorThread(threading.Thread):
             with open(TICKS_CSV, "a", newline="") as f:
                 csv.writer(f).writerow([epoch, dt_str, SYMBOL, price])
 
+            # Firebase: envia tick ao Realtime Database em background
+            from config import USE_FIREBASE
+            if USE_FIREBASE:
+                from firebase_client import push_tick_async
+                push_tick_async(SYMBOL, epoch, price, dt_str)
+
             print(
                 f"\r[COLETOR] Ticks: {self._local_count:>7,} | "
                 f"{price} @ {dt_str}",
