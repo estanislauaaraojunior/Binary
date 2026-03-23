@@ -91,6 +91,9 @@ def _symbol_display(symbol: str) -> str:
 # Evento global: sinaliza encerramento a todas as threads
 _shutdown = threading.Event()
 
+# Referência global ao coletor ativo (permite encerrá-lo do signal handler)
+_active_collector = None
+
 
 # ─────────────────────────────────────────────────────────────────
 #  Utilitários
@@ -449,11 +452,13 @@ class _CollectorThread(threading.Thread):
                     on_close=self._on_close,
                 )
                 self._ws = ws
-                ws.run_forever(reconnect=5)
+                ws.run_forever()
             except Exception as exc:
                 if not _shutdown.is_set():
                     print(f"\n[COLETOR] Exceção inesperada: {exc} — reconectando em 5s")
-                    time.sleep(5)
+            # Aguarda 5s antes de reconectar, interruptível pelo shutdown
+            if not _shutdown.is_set():
+                _shutdown.wait(timeout=5)
 
     def stop(self) -> None:
         if self._ws:
@@ -743,6 +748,8 @@ def main() -> None:
     def _handle_interrupt(sig, frame) -> None:
         print("\n\n[PIPELINE] Encerrando tudo... aguarde.")
         _shutdown.set()
+        if _active_collector is not None:
+            _active_collector.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_interrupt)
@@ -769,10 +776,12 @@ def main() -> None:
         print("[PIPELINE] Fase 0: --skip-collect ativo — histórico ignorado.")
 
     # ── FASE 1: Coletor ────────────────────────────────────────
+    global _active_collector
     collector: Optional[_CollectorThread] = None
     if not args.skip_collect:
         collector = _CollectorThread()   # já carrega _last_epoch do histórico gravado
         collector.start()
+        _active_collector = collector
         print("[PIPELINE] Fase 1: Coletor iniciado em background (sem duplicatas).")
     else:
         n_existing = _count_ticks()

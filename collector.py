@@ -18,6 +18,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import websocket
 from datetime import datetime
 
@@ -29,6 +30,7 @@ _tick_count = 0
 _ws_instance = None
 _last_price: float = 0.0          # P2: referência para detecção de spike
 _seen_epochs: set = set()          # P5: deduplicação por epoch
+_stop_event = threading.Event()    # sinaliza parada ao loop de reconexão
 
 
 # ─────────────────────────────────────────────────────────────
@@ -116,7 +118,8 @@ def on_error(ws, error) -> None:
 
 
 def on_close(ws, close_status_code, close_msg) -> None:
-    print(f"\n[COLETOR] Conexão encerrada (código: {close_status_code}) — reconectando...")
+    if not _stop_event.is_set():
+        print(f"\n[COLETOR] Conexão encerrada (código: {close_status_code}) — reconectando...")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -125,6 +128,7 @@ def on_close(ws, close_status_code, close_msg) -> None:
 
 def _handle_interrupt(sig, frame) -> None:
     print(f"\n\n[COLETOR] Interrompido. {_tick_count:,} ticks salvos em '{TICKS_CSV}'.")
+    _stop_event.set()
     if _ws_instance:
         _ws_instance.close()
     sys.exit(0)
@@ -143,15 +147,20 @@ def main() -> None:
     print("  Pressione Ctrl+C para encerrar")
     print("=" * 55)
 
-    ws = websocket.WebSocketApp(
-        WS_URL,
-        on_open=on_open,
-        on_message=on_message,
-        on_error=on_error,
-        on_close=on_close,
-    )
-    _ws_instance = ws
-    ws.run_forever(reconnect=5)
+    while not _stop_event.is_set():
+        ws = websocket.WebSocketApp(
+            WS_URL,
+            on_open=on_open,
+            on_message=on_message,
+            on_error=on_error,
+            on_close=on_close,
+        )
+        _ws_instance = ws
+        ws.run_forever()
+        # Aguarda 5s antes de reconectar, mas interrompe imediatamente se parada
+        if not _stop_event.is_set():
+            print("\n[COLETOR] Reconectando em 5s...")
+            _stop_event.wait(5)
 
 
 if __name__ == "__main__":
