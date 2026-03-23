@@ -1,2 +1,1 @@
 timestamp,symbol,direction,stake,duration,result,profit,balance_before,balance_after,ema9,ema21,rsi,adx,macd_hist,ai_confidence,ai_score,consec_losses,drawdown_pct,win_rate_recent,market_condition
-2026-03-23T16:42:30.549952,1HZ10V,SELL,102.16,10,WIN,96.2,10215.61,10311.81,9764.36347,9764.61331,37.87,30.21,-0.05858,0.5853,0.8341,0,931.18,100.0,trending
