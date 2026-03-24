@@ -105,6 +105,15 @@ SIGNAL_SCORE_MIN    = 0.65  # limiar mínimo do score técnico ponderado
 DRIFT_WINDOW       = 20    # janela de trades para calcular win rate recente
 DRIFT_WIN_RATE_MIN = 0.40  # alerta se win rate dos últimos N trades < 40%
 
+# ----- Re-treino inteligente (decidido pela IA) -----
+# O re-treino ocorre quando QUALQUER dos gatilhos abaixo for acionado.
+# Não há mais timer fixo — o próprio desempenho do modelo decide.
+RETRAIN_NEW_TICKS        = 500   # retreina após N novos ticks desde o último treino
+RETRAIN_WIN_RATE_FLOOR   = 0.40  # retreina se win rate recente < 40%
+RETRAIN_CONFIDENCE_FLOOR = 0.56  # retreina se confiança média da IA < 56%
+RETRAIN_CHECK_SEC        = 30    # intervalo da verificação dos gatilhos (segundos)
+RETRAIN_TRADE_WINDOW     = 20    # janela de trades para avaliar win rate e confiança
+
 # ----- Arquivos de log -----
 TICKS_CSV        = "ticks.csv"
 OPERATIONS_LOG   = "operacoes_log.csv"
@@ -130,6 +139,12 @@ FIREBASE_DB_URL  = os.environ.get("FIREBASE_DB_URL", "")
 
 # Bucket do Storage
 FIREBASE_BUCKET  = os.environ.get("FIREBASE_BUCKET", "")
+
+# Frequência de envio de ticks ao Realtime Database.
+# 1  → envia cada tick (~86.400 writes/dia — excede cota gratuita)
+# 10 → envia 1 a cada 10 ticks (~8.640 writes/dia — dentro do plano Spark)
+# O CSV local continua recebendo todos os ticks independentemente deste valor.
+FIREBASE_TICK_INTERVAL = 10
 
 # ─────────────────────────────────────────────────────────────────
 #  Temporal Fusion Transformer (TFT) — nível hedge fund

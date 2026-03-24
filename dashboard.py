@@ -11,6 +11,8 @@ Somente leitura — não interfere no bot em execução.
 """
 
 import os
+import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -36,9 +38,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 # ─── Caminhos ─────────────────────────────────────────────────────────────────
-BASE_DIR  = Path(__file__).parent
-OPS_CSV   = BASE_DIR / "operacoes_log.csv"
-TICKS_CSV = BASE_DIR / "ticks.csv"
+BASE_DIR     = Path(__file__).parent
+OPS_CSV      = BASE_DIR / "operacoes_log.csv"
+TICKS_CSV    = BASE_DIR / "ticks.csv"
+BOT_PID_FILE = BASE_DIR / "bot.pid"
+PIPELINE_PY  = BASE_DIR / "pipeline.py"
 
 # ─── Constantes de estilo ─────────────────────────────────────────────────────
 CLR_WIN   = "#00C9A7"   # verde-teal
@@ -49,6 +53,66 @@ CLR_CARD  = "#161B22"
 CLR_EMA9  = "#F6C90E"
 CLR_EMA21 = "#00AAFF"
 CLR_BB    = "rgba(255,255,255,0.18)"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Controle do processo do bot
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _bot_pid() -> int:
+    """Lê o PID gravado em bot.pid; retorna 0 se não existir."""
+    try:
+        return int(BOT_PID_FILE.read_text().strip())
+    except Exception:
+        return 0
+
+
+def _bot_running() -> bool:
+    """Verifica se o processo com o PID salvo ainda está ativo."""
+    pid = _bot_pid()
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)   # sinal 0 = apenas verifica existência
+        return True
+    except (ProcessLookupError, PermissionError):
+        BOT_PID_FILE.unlink(missing_ok=True)
+        return False
+
+
+def _start_bot(extra_args: list, real_mode: bool) -> bool:
+    """Lança pipeline.py como subprocesso, salva o PID e retorna True em caso de sucesso."""
+    log_path = BASE_DIR / "pipeline.log"
+    try:
+        log_file = open(log_path, "a")
+        proc = subprocess.Popen(
+            [sys.executable, str(PIPELINE_PY)] + extra_args,
+            cwd=str(BASE_DIR),
+            stdin=subprocess.PIPE if real_mode else subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+        if real_mode:
+            proc.stdin.write(b"sim\n")
+            proc.stdin.flush()
+            proc.stdin.close()
+        BOT_PID_FILE.write_text(str(proc.pid))
+        return True
+    except Exception as exc:
+        st.error(f"Erro ao iniciar o bot: {exc}")
+        return False
+
+
+def _stop_bot() -> None:
+    """Encerra o processo do bot via SIGTERM e remove bot.pid."""
+    pid = _bot_pid()
+    if pid > 0:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    BOT_PID_FILE.unlink(missing_ok=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -757,6 +821,91 @@ def main() -> None:
             sz = OPS_CSV.stat().st_size / 1024
             mtime = datetime.fromtimestamp(OPS_CSV.stat().st_mtime)
             st.caption(f"Log: {sz:.1f} KB · {mtime.strftime('%H:%M:%S')}")
+
+        # ── Controle do Bot ────────────────────────────────────────────────────
+        st.divider()
+        st.markdown("**🤖 Controle do Bot**")
+
+        running = _bot_running()
+
+        if running:
+            st.markdown(
+                f"<span style='color:{CLR_WIN};font-weight:bold;font-size:0.95rem;'>"
+                f"● Rodando</span> "
+                f"<span style='color:{CLR_NEUT};font-size:0.78rem;'>"
+                f"(PID {_bot_pid()})</span>",
+                unsafe_allow_html=True,
+            )
+            if st.button("⏹ Parar Bot", use_container_width=True, type="primary"):
+                _stop_bot()
+                st.success("Sinal de encerramento enviado.")
+                st.rerun()
+        else:
+            st.markdown(
+                f"<span style='color:{CLR_LOSS};font-weight:bold;font-size:0.95rem;'>"
+                f"● Parado</span>",
+                unsafe_allow_html=True,
+            )
+
+            with st.expander("⚙️ Configurações de Início", expanded=False):
+                bot_mode = st.radio(
+                    "Modo de operação", ["Demo", "Real"], horizontal=True, key="bot_mode"
+                )
+                balance = st.number_input(
+                    "Saldo inicial ($)", 100.0, 100_000.0, 1_000.0, 100.0, key="bot_balance"
+                )
+                hist_count = st.number_input(
+                    "Ticks históricos", 100, 5_000, 500, 100, key="bot_hist"
+                )
+                min_ticks_inp = st.number_input(
+                    "Min. ticks p/ treino", 100, 5_000, 500, 100, key="bot_minticks"
+                )
+                retrain_inp = st.number_input(
+                    "Re-treino (min)", 1, 120, 10, 1, key="bot_retrain"
+                )
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    skip_collect  = st.checkbox("Usar ticks existente", key="bot_skip")
+                    force_retrain = st.checkbox("Forçar retreino",       key="bot_force")
+                with col_b:
+                    no_scan = st.checkbox("Pular scan tendência", key="bot_noscan")
+
+                if bot_mode == "Real":
+                    st.warning("⚠️ Opera com **dinheiro real**!")
+                    real_confirmed = st.checkbox(
+                        "Confirmo modo REAL", key="bot_real_confirm"
+                    )
+                else:
+                    real_confirmed = True
+
+            can_start = real_confirmed
+            if st.button(
+                "▶ Iniciar Bot",
+                use_container_width=True,
+                type="primary",
+                disabled=not can_start,
+                key="btn_start",
+            ):
+                launch_args = ["--demo" if bot_mode == "Demo" else "--real"]
+                launch_args += ["--balance",          str(float(balance))]
+                launch_args += ["--history-count",    str(int(hist_count))]
+                launch_args += ["--min-ticks",        str(int(min_ticks_inp))]
+                launch_args += ["--retrain-interval", str(int(retrain_inp))]
+                if skip_collect:
+                    launch_args.append("--skip-collect")
+                if force_retrain:
+                    launch_args.append("--force-retrain")
+                if no_scan:
+                    launch_args.append("--no-scan")
+
+                if _start_bot(launch_args, real_mode=(bot_mode == "Real")):
+                    st.success("Bot iniciado! Acompanhe em pipeline.log.")
+                    st.rerun()
+
+        log_path = BASE_DIR / "pipeline.log"
+        if log_path.exists():
+            log_sz = log_path.stat().st_size / 1024
+            st.caption(f"📄 pipeline.log: {log_sz:.1f} KB")
 
     # ── Cabeçalho ─────────────────────────────────────────────────────────────
     st.markdown(
