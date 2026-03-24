@@ -841,3 +841,40 @@ document.getElementById("btn-stop-bot").addEventListener("click", () => {
   if (!confirm("Parar o bot agora?")) return;
   sendBotCommand("stop");
 });
+
+// ─── Limpar Dados ─────────────────────────────────────────────────
+document.getElementById("btn-clear-data").addEventListener("click", async () => {
+  if (!confirm(
+    "⚠️ Isso apagará TODAS as operações do Firestore e todos os ticks do Realtime DB.\n\nEssa ação é irreversível. Confirmar?"
+  )) return;
+
+  const btn = document.getElementById("btn-clear-data");
+  btn.disabled = true;
+  btn.textContent = "⏳ Apagando…";
+
+  try {
+    // Apaga operações no Firestore em lotes de 500
+    if (firestoreDB) {
+      let snap = await firestoreDB.collection("operacoes").limit(500).get();
+      while (!snap.empty) {
+        const batch = firestoreDB.batch();
+        snap.docs.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+        snap = await firestoreDB.collection("operacoes").limit(500).get();
+      }
+    }
+
+    // Apaga ticks no RTDB
+    if (realtimeDB) {
+      await realtimeDB.ref(`ticks/${SYMBOL}`).remove();
+    }
+
+    alert("✅ Dados apagados com sucesso.");
+  } catch (e) {
+    console.error("[LimparDados]", e);
+    alert("Erro ao apagar dados: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "🗑️ Limpar Dados";
+  }
+});

@@ -4109,3 +4109,7 @@
                    [--skip-collect] [--force-retrain] [--history-count N]
                    [--no-scan]
 pipeline.py: error: unrecognized arguments: --retrain-interval 10
+usage: pipeline.py [-h] [--real | --demo] [--balance USD] [--min-ticks N]
+                   [--skip-collect] [--force-retrain] [--history-count N]
+                   [--no-scan]
+pipeline.py: error: unrecognized arguments: --retrain-interval 10
