@@ -23,3 +23,7 @@ numpy>=1.26.0
 # Firebase (opcional — ativar USE_FIREBASE=True em config.py)
 # Gerencia Realtime Database (ticks), Firestore (operações) e Storage (modelos)
 firebase-admin>=6.3.0
+
+# Dashboard (streamlit run dashboard.py)
+streamlit>=1.32.0
+plotly>=5.18.0

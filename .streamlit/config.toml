@@ -1,0 +1,15 @@
+[theme]
+base            = "dark"
+primaryColor    = "#00C9A7"          # verde-teal (WIN)
+backgroundColor = "#0D1117"          # fundo escuro GitHub-style
+secondaryBackgroundColor = "#161B22" # cards/sidebar
+textColor       = "#E6EDF3"
+font            = "monospace"
+
+[server]
+headless        = true
+runOnSave       = false
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
