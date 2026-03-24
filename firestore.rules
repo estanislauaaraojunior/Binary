@@ -1,0 +1,14 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Dashboard web: leitura pública, escrita apenas pelo bot (backend autenticado)
+    match /operacoes/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    // Negar acesso a qualquer outro caminho por padrão
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

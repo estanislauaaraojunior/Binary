@@ -22,7 +22,7 @@ import threading
 import websocket
 from datetime import datetime
 
-from config import APP_ID, TOKEN, SYMBOL, TICKS_CSV, TICK_SPIKE_THRESHOLD, USE_FIREBASE
+from config import APP_ID, TOKEN, SYMBOL, TICKS_CSV, TICK_SPIKE_THRESHOLD, USE_FIREBASE, FIREBASE_TICK_INTERVAL
 
 WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
 
@@ -100,7 +100,8 @@ def on_message(ws, message: str) -> None:
             csv.writer(f).writerow([epoch, dt_str, SYMBOL, price])
 
         # Firebase: envia tick ao Realtime Database em background
-        if USE_FIREBASE:
+        # Só envia a cada FIREBASE_TICK_INTERVAL ticks para não estourar a cota gratuita.
+        if USE_FIREBASE and (_tick_count % FIREBASE_TICK_INTERVAL == 0):
             from firebase_client import push_tick_async
             push_tick_async(SYMBOL, epoch, price, dt_str)
 

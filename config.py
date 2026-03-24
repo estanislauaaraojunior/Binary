@@ -131,6 +131,12 @@ FIREBASE_DB_URL  = os.environ.get("FIREBASE_DB_URL", "")
 # Bucket do Storage
 FIREBASE_BUCKET  = os.environ.get("FIREBASE_BUCKET", "")
 
+# Frequência de envio de ticks ao Realtime Database.
+# 1  → envia cada tick (~86.400 writes/dia — excede cota gratuita)
+# 10 → envia 1 a cada 10 ticks (~8.640 writes/dia — dentro do plano Spark)
+# O CSV local continua recebendo todos os ticks independentemente deste valor.
+FIREBASE_TICK_INTERVAL = 10
+
 # ─────────────────────────────────────────────────────────────────
 #  Temporal Fusion Transformer (TFT) — nível hedge fund
 # ─────────────────────────────────────────────────────────────────
