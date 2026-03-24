@@ -524,7 +524,11 @@ function renderAll() {
   renderOverview();
   renderHistorico();
   renderTecnico();
-  renderIaRisco();
+  // Só renderiza IA & Risco se a aba estiver visível; caso contrário
+  // renderActiveTab() cuidará disso ao trocar de aba (com dimensões corretas).
+  if (document.getElementById("tab-ia-risco").classList.contains("active")) {
+    renderIaRisco();
+  }
   updateSidebarInfo();
 }
 
@@ -536,6 +540,8 @@ function renderActiveTab() {
   if (id === "tab-historico") renderHistorico();
   if (id === "tab-tecnico")   renderTecnico();
   if (id === "tab-ia-risco")  renderIaRisco();
+  // Força o Plotly a recalcular dimensões agora que o tab está visível
+  window.dispatchEvent(new Event("resize"));
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -628,12 +634,12 @@ if (realtimeDB) {
     .limitToLast(2000)
     .on("value",
       snap => {
+        updateSidebarStatus("rtdb", true);
         const val = snap.val();
         if (!val) { allTicks = []; return; }
         allTicks = Object.values(val)
           .filter(t => t && t.price != null)
           .sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
-        updateSidebarStatus("rtdb", true);
         if (document.getElementById("tab-tecnico").classList.contains("active")) {
           renderTecnico();
         }
@@ -868,6 +874,12 @@ document.getElementById("btn-clear-data").addEventListener("click", async () => 
     if (realtimeDB) {
       await realtimeDB.ref(`ticks/${SYMBOL}`).remove();
     }
+
+    // Limpa estado local e re-renderiza
+    allOps   = [];
+    allTicks = [];
+    updateSidebarInfo();
+    renderAll();
 
     alert("✅ Dados apagados com sucesso.");
   } catch (e) {
