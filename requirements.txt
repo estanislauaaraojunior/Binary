@@ -1,9 +1,6 @@
 # Dependências do Deriv Trading Bot
 # Instalação: pip install -r requirements.txt
 
-# Variáveis de ambiente (carrega .env automaticamente)
-python-dotenv>=1.0.0
-
 # WebSocket client (conexão com a API Deriv)
 websocket-client>=1.6.0
 
@@ -19,11 +16,3 @@ torch>=2.0.0
 # Dados
 pandas>=2.1.0
 numpy>=1.26.0
-
-# Firebase (opcional — ativar USE_FIREBASE=True em config.py)
-# Gerencia Realtime Database (ticks), Firestore (operações) e Storage (modelos)
-firebase-admin>=6.3.0
-
-# Dashboard (streamlit run dashboard.py)
-streamlit>=1.32.0
-plotly>=5.18.0

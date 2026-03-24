@@ -1,11 +1,12 @@
-# ── Credenciais Firebase (NUNCA commitar) ──────────────────────
+# ── Credenciais (NUNCA commitar) ────────────────────────────────
 serviceAccountKey.json
 *.json.bak
+.env
 
 # ── Modelos treinados (gerados localmente) ──────────────────────
 *.pkl
 
-# ── Dados coletados (grandes; recriáveis) ───────────────────────
+# ── Dados coletados (recriáveis) ────────────────────────────────
 ticks.csv
 dataset.csv
 operacoes_log.csv
@@ -13,15 +14,5 @@ operacoes_log.csv
 # ── Python ──────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-*.pyo
 .venv/
 venv/
-*.egg-info/
-
-# ── Variáveis de ambiente (segredos) ────────────────────────────
-.env
-
-# ── IDE / OS ──────────────────────────────────────────────────────
-.vscode/
-.idea/
-.DS_Store

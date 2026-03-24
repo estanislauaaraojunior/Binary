@@ -17,6 +17,7 @@ Uso:
     python pipeline.py --real                    # modo real (pede confirmação)
     python pipeline.py --history-count 1000      # baixa 1000 ticks históricos
     python pipeline.py --min-ticks 2000          # mín. no CSV antes de treinar
+    python pipeline.py --retrain-interval 10     # re-treina a cada 10 min
     python pipeline.py --balance 500             # saldo inicial p/ RiskManager
     python pipeline.py --skip-collect            # usa ticks.csv já existente
     python pipeline.py --force-retrain           # retreina mesmo com model.pkl
@@ -39,10 +40,8 @@ import dataset_builder
 import train_model
 from config import (
     APP_ID, TOKEN, SYMBOL,
-    TICKS_CSV, DATASET_CSV, AI_MODEL_PATH, OPERATIONS_LOG,
+    TICKS_CSV, DATASET_CSV, AI_MODEL_PATH,
     DEMO_MODE,
-    RETRAIN_NEW_TICKS, RETRAIN_WIN_RATE_FLOOR,
-    RETRAIN_CONFIDENCE_FLOOR, RETRAIN_CHECK_SEC, RETRAIN_TRADE_WINDOW,
 )
 from executor import DerivBot
 from risk_manager import RiskManager
@@ -53,6 +52,7 @@ from risk_manager import RiskManager
 
 _DEFAULT_HISTORY_COUNT = 500  # ticks históricos baixados da API ao iniciar
 _DEFAULT_MIN_TICKS     = 500  # mín. no CSV antes do 1º treino (igual ao histórico)
+_DEFAULT_RETRAIN_MIN   = 10   # intervalo de re-treino em minutos
 _WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
 
 # Nomes descritivos dos índices sintéticos da Deriv
@@ -90,9 +90,6 @@ def _symbol_display(symbol: str) -> str:
 
 # Evento global: sinaliza encerramento a todas as threads
 _shutdown = threading.Event()
-
-# Referência global ao coletor ativo (permite encerrá-lo do signal handler)
-_active_collector = None
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -395,7 +392,7 @@ def _fetch_historical_ticks(count: int) -> int:
     return written
 
 
-def _banner(history_count: int, min_ticks: int, demo: bool) -> None:
+def _banner(history_count: int, min_ticks: int, retrain_min: int, demo: bool) -> None:
     mode = "DEMO" if demo else "REAL 💸"
     print("=" * 60)
     print("  Deriv Pipeline — Orquestrador Automático")
@@ -403,7 +400,7 @@ def _banner(history_count: int, min_ticks: int, demo: bool) -> None:
     print(f"  Símbolo           : {_symbol_display(SYMBOL)}")
     print(f"  Ticks históricos  : {history_count:,}")
     print(f"  Ticks p/ treino   : {min_ticks:,}")
-    print(f"  Re-treino         : adaptativo (decidido pela IA)")
+    print(f"  Re-treino a cada  : {retrain_min} min")
     print(f"  Pressione Ctrl+C para encerrar tudo")
     print("=" * 60)
 
@@ -452,13 +449,11 @@ class _CollectorThread(threading.Thread):
                     on_close=self._on_close,
                 )
                 self._ws = ws
-                ws.run_forever()
+                ws.run_forever(reconnect=5)
             except Exception as exc:
                 if not _shutdown.is_set():
                     print(f"\n[COLETOR] Exceção inesperada: {exc} — reconectando em 5s")
-            # Aguarda 5s antes de reconectar, interruptível pelo shutdown
-            if not _shutdown.is_set():
-                _shutdown.wait(timeout=5)
+                    time.sleep(5)
 
     def stop(self) -> None:
         if self._ws:
@@ -495,12 +490,6 @@ class _CollectorThread(threading.Thread):
 
             with open(TICKS_CSV, "a", newline="") as f:
                 csv.writer(f).writerow([epoch, dt_str, SYMBOL, price])
-
-            # Firebase: envia tick ao Realtime Database em background
-            from config import USE_FIREBASE
-            if USE_FIREBASE:
-                from firebase_client import push_tick_async
-                push_tick_async(SYMBOL, epoch, price, dt_str)
 
             print(
                 f"\r[COLETOR] Ticks: {self._local_count:>7,} | "
@@ -606,80 +595,33 @@ def _reset_ai_predictor() -> None:
         pass
 
 
-def _smart_retrain_loop() -> None:
+def _retrain_loop(interval_min: int) -> None:
     """
-    Re-treino adaptativo: a IA decide quando retreinar.
+    Thread de re-treino periódico.
 
-    Verifica a cada RETRAIN_CHECK_SEC segundos se algum dos gatilhos foi acionado.
-    Qualquer gatilho dispara o retreino imediatamente; sem timer fixo.
-
-    Gatilhos:
-      1. Novos ticks coletados >= RETRAIN_NEW_TICKS desde o último treino.
-      2. Win rate dos últimos RETRAIN_TRADE_WINDOW trades < RETRAIN_WIN_RATE_FLOOR.
-      3. Confiança média da IA nos últimos RETRAIN_TRADE_WINDOW trades
-         < RETRAIN_CONFIDENCE_FLOOR.
+    Aguarda `interval_min` minutos, reconstrói dataset em arquivo
+    temporário e substitui model.pkl atomicamente (os.replace).
+    O bot nunca para durante o processo.
     """
-    import pandas as pd
-
-    ticks_at_last_train = _count_ticks()
+    interval_sec = interval_min * 60
 
     while not _shutdown.is_set():
-        _shutdown.wait(timeout=RETRAIN_CHECK_SEC)
+        # Dorme em fatias de 5s para responder rápido ao shutdown
+        elapsed = 0
+        while elapsed < interval_sec and not _shutdown.is_set():
+            time.sleep(5)
+            elapsed += 5
+
         if _shutdown.is_set():
             break
 
-        trigger = None
-        current_ticks = _count_ticks()
-
-        # ── Gatilho 1: volume de novos ticks ──────────────────
-        new_ticks = current_ticks - ticks_at_last_train
-        if new_ticks >= RETRAIN_NEW_TICKS:
-            trigger = f"novos ticks ({new_ticks:,} ≥ {RETRAIN_NEW_TICKS:,})"
-
-        # ── Gatilhos 2 e 3: desempenho recente do modelo ──────
-        if trigger is None and os.path.exists(OPERATIONS_LOG):
-            try:
-                df = pd.read_csv(OPERATIONS_LOG, header=None)
-                # Colunas: timestamp, symbol, direction, stake, duration,
-                #          result(5), profit, balance_before, balance_after,
-                #          ema9, ema21, rsi, adx, macd_hist,
-                #          ai_confidence(14), ai_score, consec_losses,
-                #          drawdown_pct, win_rate_recent, market_condition
-                if len(df) >= RETRAIN_TRADE_WINDOW:
-                    recent = df.tail(RETRAIN_TRADE_WINDOW)
-
-                    # Gatilho 2: win rate baixo
-                    win_rate = (recent.iloc[:, 5] == "WIN").mean()
-                    if win_rate < RETRAIN_WIN_RATE_FLOOR:
-                        trigger = (
-                            f"win rate baixo "
-                            f"({win_rate:.1%} < {RETRAIN_WIN_RATE_FLOOR:.0%})"
-                        )
-
-                    # Gatilho 3: confiança da IA em queda
-                    if trigger is None:
-                        conf_series = pd.to_numeric(
-                            recent.iloc[:, 14], errors="coerce"
-                        ).dropna()
-                        if len(conf_series) >= RETRAIN_TRADE_WINDOW // 2:
-                            avg_conf = conf_series.mean()
-                            if avg_conf < RETRAIN_CONFIDENCE_FLOOR:
-                                trigger = (
-                                    f"confiança IA baixa "
-                                    f"({avg_conf:.2%} < {RETRAIN_CONFIDENCE_FLOOR:.0%})"
-                                )
-            except Exception:
-                pass
-
-        if trigger is None:
-            continue
-
-        print(f"\n[RE-TREINO] Gatilho: {trigger}")
+        n_ticks = _count_ticks()
         print(
-            f"[RE-TREINO] Iniciando re-treino adaptativo "
-            f"({current_ticks:,} ticks disponíveis)..."
+            f"\n[RE-TREINO] Iniciando re-treino automático "
+            f"({n_ticks:,} ticks disponíveis)..."
         )
 
+        # Usa arquivos temporários para não corromper os arquivos em uso
         tmp_dataset = DATASET_CSV + ".tmp"
         tmp_model   = AI_MODEL_PATH + ".new"
 
@@ -689,8 +631,10 @@ def _smart_retrain_loop() -> None:
             # Substituição atômica: o bot nunca lê um arquivo pela metade
             os.replace(tmp_model, AI_MODEL_PATH)
             _reset_ai_predictor()
-            ticks_at_last_train = _count_ticks()   # reinicia a contagem de ticks
-            print("[RE-TREINO] model.pkl atualizado com sucesso.")
+            print(
+                f"[RE-TREINO] model.pkl atualizado com sucesso. "
+                f"Próximo re-treino em {interval_min} min."
+            )
         else:
             print("[RE-TREINO] Falhou — bot continua com o modelo anterior.")
 
@@ -752,6 +696,10 @@ def main() -> None:
         help=f"Ticks mínimos antes do 1º treino (padrão: {_DEFAULT_MIN_TICKS}).",
     )
     parser.add_argument(
+        "--retrain-interval", type=int, default=_DEFAULT_RETRAIN_MIN, metavar="MIN",
+        help=f"Intervalo de re-treino em minutos (padrão: {_DEFAULT_RETRAIN_MIN}).",
+    )
+    parser.add_argument(
         "--skip-collect", action="store_true",
         help="Não inicia o coletor (usa ticks.csv já existente).",
     )
@@ -783,14 +731,12 @@ def main() -> None:
             print("Operação cancelada.")
             sys.exit(0)
 
-    _banner(args.history_count, args.min_ticks, is_demo)
+    _banner(args.history_count, args.min_ticks, args.retrain_interval, is_demo)
 
     # ── Handler global de Ctrl+C ───────────────────────────────
     def _handle_interrupt(sig, frame) -> None:
         print("\n\n[PIPELINE] Encerrando tudo... aguarde.")
         _shutdown.set()
-        if _active_collector is not None:
-            _active_collector.stop()
         sys.exit(0)
 
     signal.signal(signal.SIGINT, _handle_interrupt)
@@ -817,12 +763,10 @@ def main() -> None:
         print("[PIPELINE] Fase 0: --skip-collect ativo — histórico ignorado.")
 
     # ── FASE 1: Coletor ────────────────────────────────────────
-    global _active_collector
     collector: Optional[_CollectorThread] = None
     if not args.skip_collect:
         collector = _CollectorThread()   # já carrega _last_epoch do histórico gravado
         collector.start()
-        _active_collector = collector
         print("[PIPELINE] Fase 1: Coletor iniciado em background (sem duplicatas).")
     else:
         n_existing = _count_ticks()
@@ -849,18 +793,17 @@ def main() -> None:
             _shutdown.set()
             sys.exit(1)
 
-    # ── FASE 5: Re-treino adaptativo ─────────────────────────────────
+    # ── FASE 5: Re-treino periódico ────────────────────────────
     retrain_thread = threading.Thread(
-        target=_smart_retrain_loop,
+        target=_retrain_loop,
+        args=(args.retrain_interval,),
         daemon=True,
         name="Retrain",
     )
     retrain_thread.start()
     print(
-        f"\n[PIPELINE] Fase 5: Re-treino adaptativo ativado "
-        f"(gatilhos: {RETRAIN_NEW_TICKS:,} ticks | "
-        f"win rate < {RETRAIN_WIN_RATE_FLOOR:.0%} | "
-        f"confiança IA < {RETRAIN_CONFIDENCE_FLOOR:.0%})."
+        f"\n[PIPELINE] Fase 5: Re-treino automático agendado "
+        f"a cada {args.retrain_interval} min."
     )
 
     # ── FASE 6: Bot ────────────────────────────────────────────
