@@ -198,14 +198,12 @@ def do_start(args: dict) -> dict:
     mode        = args.get("mode", "demo")
     hist_count  = args.get("hist_count", 500)
     min_ticks   = args.get("min_ticks", 500)
-    retrain_min = args.get("retrain_min", 10)
 
     cmd = [sys.executable, str(PIPELINE_PY)]
     cmd += ["--demo" if mode == "demo" else "--real"]
-    cmd += ["--balance",          str(round(balance, 2))]
-    cmd += ["--history-count",    str(int(hist_count))]
-    cmd += ["--min-ticks",        str(int(min_ticks))]
-    cmd += ["--retrain-interval", str(int(retrain_min))]
+    cmd += ["--balance",       str(round(balance, 2))]
+    cmd += ["--history-count", str(int(hist_count))]
+    cmd += ["--min-ticks",     str(int(min_ticks))]
     if args.get("skip_collect"):  cmd.append("--skip-collect")
     if args.get("force_retrain"): cmd.append("--force-retrain")
     if args.get("no_scan"):       cmd.append("--no-scan")

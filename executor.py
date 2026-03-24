@@ -75,6 +75,9 @@ class DerivBot:
         # após o aquecimento (aprendizado dos 500 candles históricos já aplicado).
         self._ticks_since_last_entry: int = ENTRY_TICK_INTERVAL
 
+        # Flag: saldo já sincronizado com a Deriv na primeira conexão
+        self._balance_synced: bool = False
+
         self._ws: Optional[websocket.WebSocketApp] = None
 
     # ─────────────────────────────────────────────────────────
@@ -88,8 +91,7 @@ class DerivBot:
         print(f"  Deriv Trading Bot — Modo: {mode}")
         print(f"  Símbolo : {SYMBOL}")
         print(f"  Duração : {DURATION} {DURATION_UNIT}")
-        print(f"  Saldo   : {self.risk_manager.balance:.2f} USD")
-        print(f"  Stake   : {self.risk_manager.get_stake():.2f} USD (1% do saldo)")
+        print(f"  Saldo   : aguardando conexão com a Deriv...")
         print(f"{'=' * 55}\n")
 
         ws = websocket.WebSocketApp(
@@ -143,7 +145,31 @@ class DerivBot:
     def _handle_authorize(self, ws, auth: dict) -> None:
         balance = float(auth.get("balance", self.risk_manager.balance))
         self.risk_manager.balance = balance
-        print(f"[BOT] Autorizado | Saldo real: {balance:.2f} USD")
+
+        # Primeira conexão: sincroniza todos os campos de saldo com o valor real
+        # da conta Deriv (sobrescreve o placeholder passado no --balance).
+        if not self._balance_synced:
+            self.risk_manager._initial_balance    = balance
+            self.risk_manager._daily_start_balance = balance
+            self._balance_synced = True
+            print(
+                f"[BOT] Autorizado | Saldo real sincronizado: {balance:.2f} USD"
+            )
+        else:
+            # Reconexão: atualiza apenas o saldo corrente (mantém a base diária)
+            print(f"[BOT] Reconectado | Saldo: {balance:.2f} USD")
+
+        # Publica o saldo real no RTDB para o dashboard refletir imediatamente
+        try:
+            from config import USE_FIREBASE
+            if USE_FIREBASE:
+                from firebase_client import _rtdb_ref
+                ref = _rtdb_ref("bot_control/status")
+                if ref is not None:
+                    ref.update({"balance": round(balance, 2), "balance_ok": True})
+        except Exception:
+            pass
+
         ws.send(json.dumps({"ticks": SYMBOL, "subscribe": 1}))
 
         # Re-subscrever ao contrato ativo em caso de reconexão
