@@ -351,7 +351,6 @@ def train(dataset_path: str, output_path: str, test_ratio: float, gap_ratio: flo
             print(f"[TREINO] TFT salvo em '{TRANSFORMER_MODEL_PATH}'")
             if USE_FIREBASE:
                 from firebase_client import upload_model
-                import os
                 upload_model(TRANSFORMER_MODEL_PATH, os.path.basename(TRANSFORMER_MODEL_PATH))
 
             # Comparação final de todas as arquiteturas
@@ -381,7 +380,6 @@ def train(dataset_path: str, output_path: str, test_ratio: float, gap_ratio: flo
     print(f"[TREINO] Modelo salvo em '{output_path}'")
     if USE_FIREBASE:
         from firebase_client import upload_model
-        import os
         upload_model(output_path, os.path.basename(output_path))
 
     # ── Modelo de duração dinâmica (RF clássico — complementa o TFT) ────────
@@ -415,7 +413,6 @@ def train(dataset_path: str, output_path: str, test_ratio: float, gap_ratio: flo
         print(f"[TREINO] Modelo de duração (RF) salvo em '{DURATION_MODEL_PATH}'")
         if USE_FIREBASE:
             from firebase_client import upload_model
-            import os
             upload_model(DURATION_MODEL_PATH, os.path.basename(DURATION_MODEL_PATH))
     else:
         print("[TREINO] Coluna 'optimal_duration' não encontrada — regenere o dataset antes de retreinar.")

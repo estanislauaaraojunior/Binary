@@ -4,9 +4,13 @@
 # ============================================================
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv()  # carrega variáveis de .env (ignorado se não existir)
+# Carrega .env com caminho absoluto (funciona independente do CWD e de como
+# o processo foi iniciado: terminal, systemd, subprocess, etc.).
+# override=True garante que o .env sobrepõe qualquer variável stale no ambiente.
+load_dotenv(Path(__file__).parent / ".env", override=True)
 
 # ----- Conta -----
 # True  → opera na conta DEMO (seguro — dinheiro virtual)
@@ -104,15 +108,6 @@ SIGNAL_SCORE_MIN    = 0.65  # limiar mínimo do score técnico ponderado
 # ----- Detecção de drift (P13) -----
 DRIFT_WINDOW       = 20    # janela de trades para calcular win rate recente
 DRIFT_WIN_RATE_MIN = 0.40  # alerta se win rate dos últimos N trades < 40%
-
-# ----- Re-treino inteligente (decidido pela IA) -----
-# O re-treino ocorre quando QUALQUER dos gatilhos abaixo for acionado.
-# Não há mais timer fixo — o próprio desempenho do modelo decide.
-RETRAIN_NEW_TICKS        = 500   # retreina após N novos ticks desde o último treino
-RETRAIN_WIN_RATE_FLOOR   = 0.40  # retreina se win rate recente < 40%
-RETRAIN_CONFIDENCE_FLOOR = 0.56  # retreina se confiança média da IA < 56%
-RETRAIN_CHECK_SEC        = 30    # intervalo da verificação dos gatilhos (segundos)
-RETRAIN_TRADE_WINDOW     = 20    # janela de trades para avaliar win rate e confiança
 
 # ----- Arquivos de log -----
 TICKS_CSV        = "ticks.csv"

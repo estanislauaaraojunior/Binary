@@ -67,7 +67,12 @@ def on_message(ws, message: str) -> None:
     data = json.loads(message)
 
     if "error" in data:
-        print(f"\n[COLETOR] Erro API: {data['error']['message']}")
+        err = data["error"]
+        print(f"\n[COLETOR] Erro API: {err['message']}")
+        if err.get("code") in ("InvalidToken", "AuthorizationRequired"):
+            print("[COLETOR] ⚠ Token inválido — atualize DERIV_TOKEN no .env")
+            print("[COLETOR]   Renove em: app.deriv.com → Configurações → Tokens de API")
+            ws.close()
         return
 
     if data.get("msg_type") == "authorize":
