@@ -66,6 +66,35 @@ _tft_seq_len: int    = TRANSFORMER_SEQ_LEN
 _tft_dur_classes: list = []
 _tft_model_loaded: bool = False
 
+# Buffer rolante de confiança — alimenta o re-treino adaptativo
+_confidence_buffer: list = []
+_CONF_BUFFER_MAX: int = 50
+
+
+# ─────────────────────────────────────────────────────────────────
+#  API pública do buffer de confiança
+# ─────────────────────────────────────────────────────────────────
+
+def record_confidence(conf: float) -> None:
+    """Registra a confiança de uma predição no buffer rolante."""
+    global _confidence_buffer
+    _confidence_buffer.append(conf)
+    if len(_confidence_buffer) > _CONF_BUFFER_MAX:
+        _confidence_buffer.pop(0)
+
+
+def get_avg_confidence() -> Optional[float]:
+    """Retorna confiança média das últimas predições, ou None se buffer vazio."""
+    if not _confidence_buffer:
+        return None
+    return sum(_confidence_buffer) / len(_confidence_buffer)
+
+
+def clear_confidence_buffer() -> None:
+    """Limpa o buffer de confiança (chamado pelo pipeline após re-treino bem-sucedido)."""
+    global _confidence_buffer
+    _confidence_buffer.clear()
+
 
 def _load_model() -> None:
     """Carrega model.pkl no singleton global. Chamado automaticamente na primeira predição."""
@@ -374,32 +403,39 @@ def predict(prices: list) -> tuple:
 
     # Apenas modelo clássico disponível
     if tft_dir is None or _tft_model is None:
-        return classical_dir, classical_conf
+        final_dir, final_conf = classical_dir, classical_conf
 
     # Apenas TFT disponível
-    if classical_dir is None or _model is None:
-        return tft_dir, tft_conf
+    elif classical_dir is None or _model is None:
+        final_dir, final_conf = tft_dir, tft_conf
 
     # Ambos disponíveis: ensemble blend
-    blend = TRANSFORMER_BLEND_WEIGHT   # 0.55
-
-    if tft_dir == classical_dir:
-        # Concordância: média ponderada das confianças
-        blended = tft_conf * blend + classical_conf * (1.0 - blend)
-        if blended >= AI_CONFIDENCE_MIN:
-            return tft_dir, blended
-        return None, blended
     else:
-        # Discordância: penaliza 15% no sinal mais confiante
-        if tft_conf >= classical_conf:
-            direction = tft_dir
-            penalized = tft_conf * 0.85
+        blend = TRANSFORMER_BLEND_WEIGHT   # 0.55
+
+        if tft_dir == classical_dir:
+            # Concordância: média ponderada das confianças
+            blended = tft_conf * blend + classical_conf * (1.0 - blend)
+            if blended >= AI_CONFIDENCE_MIN:
+                final_dir, final_conf = tft_dir, blended
+            else:
+                final_dir, final_conf = None, blended
         else:
-            direction = classical_dir
-            penalized = classical_conf * 0.85
-        if penalized >= AI_CONFIDENCE_MIN:
-            return direction, penalized
-        return None, penalized
+            # Discordância: penaliza 15% no sinal mais confiante
+            if tft_conf >= classical_conf:
+                direction = tft_dir
+                penalized = tft_conf * 0.85
+            else:
+                direction = classical_dir
+                penalized = classical_conf * 0.85
+            if penalized >= AI_CONFIDENCE_MIN:
+                final_dir, final_conf = direction, penalized
+            else:
+                final_dir, final_conf = None, penalized
+
+    # Registra confiança no buffer para o re-treino adaptativo
+    record_confidence(final_conf)
+    return final_dir, final_conf
 
 
 # ─────────────────────────────────────────────────────────────────

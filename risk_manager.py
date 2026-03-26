@@ -59,6 +59,8 @@ class RiskManager:
                 "ai_confidence", "ai_score",
                 "consec_losses",
                 "drawdown_pct", "win_rate_recent", "market_condition",
+                "contract_id", "buy_price", "payout",
+                "entry_spot", "exit_spot", "date_start", "date_expiry",
             ])
 
     # ──────────────────────────────────────────────
@@ -122,6 +124,7 @@ class RiskManager:
         duration: int,
         profit: float,
         indicators: dict,
+        contract_info: dict = None,
     ) -> None:
         """
         Atualiza saldo, controles de risco e salva log.
@@ -179,6 +182,7 @@ class RiskManager:
 
         with open(OPERATIONS_LOG, "a", newline="") as f:
             writer = csv.writer(f)
+            ci = contract_info or {}
             writer.writerow([
                 now_iso,
                 symbol, direction, stake, duration,
@@ -193,11 +197,19 @@ class RiskManager:
                 indicators.get("ai_score",       ""),
                 self._consec_losses,
                 drawdown_pct, win_rate_recent, market_condition,
+                ci.get("contract_id",  ""),
+                ci.get("buy_price",    ""),
+                ci.get("payout",       ""),
+                ci.get("entry_spot",   ""),
+                ci.get("exit_spot",    ""),
+                ci.get("date_start",   ""),
+                ci.get("date_expiry",  ""),
             ])
 
         # Firebase: salva operação no Firestore em background
         if USE_FIREBASE:
             from firebase_client import add_operation_async
+            ci = contract_info or {}
             add_operation_async({
                 "timestamp":       now_iso,
                 "symbol":          symbol,
@@ -208,8 +220,6 @@ class RiskManager:
                 "profit":          profit,
                 "balance_before":  balance_before,
                 "balance_after":   self.balance,
-                "ema9":            indicators.get("ema9"),
-                "ema21":           indicators.get("ema21"),
                 "rsi":             indicators.get("rsi"),
                 "adx":             indicators.get("adx"),
                 "macd_hist":       indicators.get("macd_hist"),
@@ -219,6 +229,14 @@ class RiskManager:
                 "drawdown_pct":    drawdown_pct,
                 "win_rate_recent": win_rate_recent,
                 "market_condition": market_condition,
+                # Dados do contrato Deriv
+                "contract_id":     ci.get("contract_id"),
+                "buy_price":       ci.get("buy_price"),
+                "payout":          ci.get("payout"),
+                "entry_spot":      ci.get("entry_spot"),
+                "exit_spot":       ci.get("exit_spot"),
+                "date_start":      ci.get("date_start"),
+                "date_expiry":     ci.get("date_expiry"),
             })
 
     # ──────────────────────────────────────────────
@@ -234,14 +252,21 @@ class RiskManager:
             self._daily_profit = 0.0
             self._consec_losses = 0
 
+    @property
+    def win_rate_recent(self):
+        """Win rate da janela deslizante recente (0.0–1.0), ou None se sem trades."""
+        if not self._recent_results:
+            return None
+        return sum(self._recent_results) / len(self._recent_results)
+
     def _check_drift(self) -> None:
         """P13: Alerta quando o win rate recente cai abaixo do limiar configurado."""
         if len(self._recent_results) < DRIFT_WINDOW:
             return
-        wr = sum(self._recent_results) / len(self._recent_results)
+        wr = self.win_rate_recent
         if wr < DRIFT_WIN_RATE_MIN:
             print(
                 f"[DRIFT] ALERTA: win rate dos últimos {DRIFT_WINDOW} trades = "
                 f"{wr:.1%} (abaixo de {DRIFT_WIN_RATE_MIN:.0%}) "
-                "→ considere retreinar o modelo"
+                "→ re-treino adaptativo será acionado"
             )

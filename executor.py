@@ -80,6 +80,11 @@ class DerivBot:
         # Sinaliza token inválido para que o pipeline encerre sem reconectar
         self.invalid_token: bool = False
 
+        # Dados do contrato preenchidos no momento da compra/encerramento
+        self._pending_buy_price: float = 0.0
+        self._pending_payout: float = 0.0
+        self._pending_date_start: str = ""
+
     # ─────────────────────────────────────────────────────────
     #  API pública
     # ─────────────────────────────────────────────────────────
@@ -104,6 +109,14 @@ class DerivBot:
         )
         self._ws = ws
         ws.run_forever(reconnect=5)
+
+    def stop(self) -> None:
+        """Para o bot graciosamente sem reconectar."""
+        if self._watchdog is not None:
+            self._watchdog.cancel()
+        if self._ws is not None:
+            self._ws.keep_running = False
+            self._ws.close()
 
     # ─────────────────────────────────────────────────────────
     #  Handlers WebSocket
@@ -272,7 +285,10 @@ class DerivBot:
         self._open_contract_id = contract_id
         self._pending_timestamp = 0.0          # P1: proposal foi aceita, limpar timeout
         self._buy_timestamp = time.time()      # P7: marcar abertura do contrato
-        print(f"[BOT] Contrato aberto | ID: {contract_id}")
+        self._pending_buy_price = float(buy.get("buy_price", self._pending_stake))
+        self._pending_payout    = float(buy.get("payout", 0.0))
+        self._pending_date_start = str(buy.get("start_time", ""))
+        print(f"[BOT] Contrato aberto | ID: {contract_id} | Custo: {self._pending_buy_price:.2f} | Payout: {self._pending_payout:.2f}")
 
         # Subscrever atualizações do contrato para capturar o resultado
         if contract_id:
@@ -291,18 +307,34 @@ class DerivBot:
 
         profit = float(contract.get("profit", 0.0))
 
+        entry_spot  = float(contract.get("entry_tick",  contract.get("entry_spot",  0.0)) or 0.0)
+        exit_spot   = float(contract.get("exit_tick",   contract.get("exit_spot",   0.0)) or 0.0)
+        date_expiry = str(contract.get("date_expiry", ""))
+
         self.risk_manager.record_result(
-            symbol     = SYMBOL,
-            direction  = self._pending_direction,
-            stake      = self._pending_stake,
-            duration   = self._pending_duration,
-            profit     = profit,
-            indicators = self._pending_indicators,
+            symbol        = SYMBOL,
+            direction     = self._pending_direction,
+            stake         = self._pending_stake,
+            duration      = self._pending_duration,
+            profit        = profit,
+            indicators    = self._pending_indicators,
+            contract_info = {
+                "contract_id":  self._open_contract_id,
+                "buy_price":    self._pending_buy_price,
+                "payout":       self._pending_payout,
+                "date_start":   self._pending_date_start,
+                "entry_spot":   entry_spot,
+                "exit_spot":    exit_spot,
+                "date_expiry":  date_expiry,
+            },
         )
 
         self._in_trade         = False
         self._open_contract_id = None
-        self._buy_timestamp    = 0.0  # P7: limpar após contrato encerrado
+        self._buy_timestamp    = 0.0   # P7: limpar após contrato encerrado
+        self._pending_buy_price  = 0.0
+        self._pending_payout     = 0.0
+        self._pending_date_start = ""
 
     # ─────────────────────────────────────────────────────────
     #  P9 — Watchdog de heartbeat

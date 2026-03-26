@@ -106,43 +106,53 @@ def _storage_bucket():
 
 def push_tick_async(symbol: str, epoch: int, price: float, dt_str: str) -> None:
     """
-    Envia tick ao Realtime Database em thread daemon (não bloqueia o coletor).
+    Sobrescreve o tick ao vivo no Realtime Database em thread daemon (não bloqueia o coletor).
+
+    Mantém apenas o tick mais recente por símbolo — evita acúmulo ilimitado
+    de nós e preserva a cota gratuita do Firebase.
 
     Estrutura no DB:
-        ticks/<SYMBOL>/<push_id>/
+        live_tick/<SYMBOL>/
             epoch    : int
             price    : float
             datetime : str  (ISO-8601)
     """
-    def _push() -> None:
-        ref = _rtdb_ref(f"ticks/{symbol}")
+    def _set() -> None:
+        ref = _rtdb_ref(f"live_tick/{symbol}")
         if ref is None:
             return
         try:
-            ref.push({"epoch": epoch, "price": price, "datetime": dt_str})
+            ref.set({"epoch": epoch, "price": price, "datetime": dt_str})
         except Exception as exc:
             print(f"\n[FIREBASE] Erro ao salvar tick: {exc}")
 
-    threading.Thread(target=_push, daemon=True).start()
+    threading.Thread(target=_set, daemon=True).start()
 
 
 def add_operation_async(data: dict) -> None:
     """
-    Salva registro de operação na coleção 'operacoes' do Firestore em background.
+    Salva registro de operação na coleção 'operacoes' do Firestore.
 
-    O documento inclui todos os campos do CSV de log mais timestamp para
-    permitir consultas e dashboards via Firebase Console.
+    A escrita é feita em thread separada mas aguarda confirmação (até 8s)
+    para evitar perda de dados quando o processo é encerrado (threads daemon
+    seriam mortas antes de completar a escrita no Firestore).
     """
+    done = threading.Event()
+
     def _add() -> None:
         fs = _firestore_client()
         if fs is None:
+            done.set()
             return
         try:
             fs.collection("operacoes").add(data)
         except Exception as exc:
             print(f"\n[FIREBASE] Erro ao salvar operação: {exc}")
+        finally:
+            done.set()
 
     threading.Thread(target=_add, daemon=True).start()
+    done.wait(timeout=8.0)
 
 
 def upload_model(local_path: str, remote_name: str) -> None:
@@ -163,3 +173,31 @@ def upload_model(local_path: str, remote_name: str) -> None:
         print(f"[FIREBASE] Modelo enviado: models/{remote_name}")
     except Exception as exc:
         print(f"[FIREBASE] Erro no upload do modelo '{remote_name}': {exc}")
+
+
+def write_train_meta_async(train_count: int, ticks_count: int) -> None:
+    """
+    Atualiza metadados de treino no RTDB em thread daemon (não bloqueia o pipeline).
+
+    Estrutura no DB:
+        bot_control/train_meta/
+            train_count : int   — número total de treinos realizados
+            last_train  : str   — timestamp ISO-8601 UTC do último treino
+            ticks_count : int   — ticks disponíveis no momento do treino
+    """
+    import datetime as _dt
+
+    def _write() -> None:
+        ref = _rtdb_ref("bot_control/train_meta")
+        if ref is None:
+            return
+        try:
+            ref.update({
+                "train_count": train_count,
+                "last_train":  _dt.datetime.utcnow().isoformat() + "Z",
+                "ticks_count": ticks_count,
+            })
+        except Exception as exc:
+            print(f"\n[FIREBASE] Erro ao salvar meta de treino: {exc}")
+
+    threading.Thread(target=_write, daemon=True).start()

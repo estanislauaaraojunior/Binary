@@ -29,7 +29,7 @@ const BB_STD    = 2.0;
 let allOps   = [];   // Array de operações do Firestore
 let allTicks = [];   // Array de ticks do RTDB
 let tickN    = 500;  // controlado pelo slider
-
+let trainMeta = null; // Metadados de treino da IA (do RTDB bot_control/train_meta)
 // ─── Plotly layout base (dark) ────────────────────────────────────
 const LAYOUT_BASE = {
   paper_bgcolor: "#161B22",
@@ -178,6 +178,29 @@ function renderOverview() {
   const maxDD      = Math.max(...ops.map(op => Number(op.drawdown_pct) || 0));
   const profitToday = opsToday.reduce((s, op) => s + (Number(op.profit) || 0), 0);
 
+  // ── Confiança média IA ───────────────────────────────────────────────
+  const avgConf = total
+    ? ops.reduce((s, op) => s + (Number(op.ai_confidence) || 0), 0) / total * 100
+    : 0;
+  const lastConf = Number(ops[ops.length - 1].ai_confidence || 0) * 100;
+
+  // ── Streak atual ───────────────────────────────────────────────────────
+  let streak = 0, streakType = "";
+  for (let i = ops.length - 1; i >= 0; i--) {
+    if (!streakType) { streakType = ops[i].result; streak = 1; }
+    else if (ops[i].result === streakType) streak++;
+    else break;
+  }
+
+  // ── Metadados de treino (RTDB) ──────────────────────────────────────────
+  const trainCount = trainMeta != null ? trainMeta.train_count : "—";
+  const ticksCount = trainMeta != null ? (trainMeta.ticks_count || 0).toLocaleString("pt-BR") : "—";
+  const lastTrainStr = trainMeta?.last_train
+    ? fmtTime(new Date(trainMeta.last_train)) : "—";
+
+  // ── Símbolo atual (da última operação) ───────────────────────────────────
+  const currentSymbol = ops[ops.length - 1].symbol || "—";
+
   const profitColor  = totalProfit  >= 0 ? "var(--clr-win)" : "var(--clr-loss)";
   const profitTColor = profitToday  >= 0 ? "var(--clr-win)" : "var(--clr-loss)";
   const winClass     = winRate >= 55 ? "win" : winRate >= 45 ? "" : "loss";
@@ -207,6 +230,21 @@ function renderOverview() {
       <div class="kpi-label">🔻 Drawdown Máx</div>
       <div class="kpi-value" style="color:${maxDD > 20 ? 'var(--clr-loss)' : 'var(--clr-ema9)'}">${fmtPct(maxDD)}</div>
       <div class="kpi-delta" style="color:var(--clr-muted)">limite: 25%</div>
+    </div>
+    <div class="kpi-card ${avgConf >= 60 ? 'win' : avgConf >= 55 ? '' : 'loss'}">
+      <div class="kpi-label">🤖 Conf. IA Média</div>
+      <div class="kpi-value" style="color:${avgConf >= 60 ? 'var(--clr-win)' : avgConf >= 55 ? 'var(--clr-ema9)' : 'var(--clr-loss)'}">${fmtPct(avgConf)}</div>
+      <div class="kpi-delta" style="color:var(--clr-muted)">Atual: ${fmtPct(lastConf)}</div>
+    </div>
+    <div class="kpi-card blue">
+      <div class="kpi-label">🧠 Treinos da IA</div>
+      <div class="kpi-value">${trainCount}</div>
+      <div class="kpi-delta" style="color:var(--clr-muted)">Ticks: ${ticksCount} • Último: ${lastTrainStr}</div>
+    </div>
+    <div class="kpi-card ${streakType === 'WIN' ? 'win' : streakType === 'LOSS' ? 'loss' : ''}">
+      <div class="kpi-label">${streakType === 'WIN' ? '🔥' : streakType === 'LOSS' ? '❌' : '―'} Streak Atual</div>
+      <div class="kpi-value">${streak > 0 ? (streakType === 'WIN' ? '+' : '-') + streak : '—'}</div>
+      <div class="kpi-delta" style="color:var(--clr-muted)">📁 ${currentSymbol}</div>
     </div>
   `;
 
@@ -451,11 +489,12 @@ function renderIaRisco() {
   const ops = [...allOps].sort((a, b) => (opToDate(a) || 0) - (opToDate(b) || 0));
 
   // ── Win Rate por faixa de confiança ────────────────────────────
-  const bins   = ["0.5-0.55", "0.55-0.60", "0.60-0.65", "0.65-0.70", "0.70-0.75", "0.75+"];
-  const edges  = [0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 1.01];
+  const bins   = ["<0.50", "0.50-0.55", "0.55-0.60", "0.60-0.65", "0.65-0.70", "0.70-0.75", "0.75+"];
+  const edges  = [-Infinity, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75, 1.01];
   const wrBin  = bins.map(() => ({ w: 0, t: 0 }));
   ops.forEach(op => {
-    const conf = Number(op.ai_confidence) || 0;
+    // null/undefined → -1 para cair no bin "<0.50"
+    const conf = (op.ai_confidence != null) ? Number(op.ai_confidence) : -1;
     for (let i = 0; i < edges.length - 1; i++) {
       if (conf >= edges[i] && conf < edges[i + 1]) {
         wrBin[i].t++;
@@ -654,6 +693,18 @@ if (realtimeDB) {
   realtimeDB.ref("bot_control/status").on("value", snap => {
     _updateBotStatusUI(snap.val());
   });
+
+  // ── RTDB: metadados de treino da IA ───────────────────────────
+  realtimeDB.ref("bot_control/train_meta").on(
+    "value",
+    snap => {
+      trainMeta = snap.val() || null;
+      if (document.getElementById("tab-overview").classList.contains("active")) {
+        renderOverview();
+      }
+    },
+    err => console.warn("[RTDB train_meta]", err.code, "— verifique database.rules.json")
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════
