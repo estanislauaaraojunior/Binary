@@ -3,7 +3,7 @@
     "ticks": {
       "$symbol": {
         ".read": true,
-        ".write": false
+        ".write": "auth != null"
       }
     },
     "bot_control": {
