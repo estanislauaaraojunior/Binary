@@ -247,6 +247,31 @@ def do_stop() -> dict:
         return {"ok": False, "msg": f"Erro ao parar: {e}"}
 
 
+def do_clear_local_data() -> dict:
+    """Apaga/reinicia os arquivos CSV e modelos locais."""
+    try:
+        from config import TICKS_CSV, DATASET_CSV, OPERATIONS_LOG, AI_MODEL_PATH
+    except ImportError as e:
+        return {"ok": False, "msg": f"Erro ao importar config: {e}"}
+
+    removed = []
+    for path_str in (DATASET_CSV, OPERATIONS_LOG, AI_MODEL_PATH,
+                     "duration_model.pkl", "transformer_model.pkl"):
+        p = BASE_DIR / path_str
+        if p.exists():
+            p.unlink()
+            removed.append(p.name)
+
+    # Reinicia ticks.csv mantendo só o cabeçalho
+    ticks_path = BASE_DIR / TICKS_CSV
+    ticks_path.write_text("epoch,datetime,symbol,price\n")
+    removed.append(f"{TICKS_CSV} (reiniciado)")
+
+    msg = "Dados locais apagados: " + (', '.join(removed) if removed else "nenhum arquivo encontrado")
+    print(f"[AGENT] {msg}")
+    return {"ok": True, "msg": msg}
+
+
 # ─── Loop principal ────────────────────────────────────────────────────
 
 def main():
@@ -291,6 +316,8 @@ def main():
                         result = do_start(data.get("args", {}))
                     elif action == "stop":
                         result = do_stop()
+                    elif action == "clear_local_data":
+                        result = do_clear_local_data()
                     else:
                         result = {"ok": False, "msg": f"Ação desconhecida: {action}"}
 

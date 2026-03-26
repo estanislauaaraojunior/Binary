@@ -1028,11 +1028,10 @@ def main() -> None:
         # 2. Atualiza símbolo em todos os módulos
         _update_active_symbol(new_sym)
 
-        # 3. Faz backup dos ticks anteriores e inicia coleta zerada
+        # 3. Descarta os ticks anteriores e inicia coleta zerada
         if os.path.exists(TICKS_CSV):
-            backup = TICKS_CSV + f".bak.{old_sym}"
-            os.replace(TICKS_CSV, backup)
-            print(f"[PIPELINE] Ticks de '{old_sym}' salvos em '{backup}'.")
+            os.remove(TICKS_CSV)
+            print(f"[PIPELINE] Ticks de '{old_sym}' descartados (troca de símbolo).")
 
         # 4. Reinicia histórico + coletor para o novo símbolo
         if not args.skip_collect:

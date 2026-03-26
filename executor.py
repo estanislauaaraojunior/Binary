@@ -311,30 +311,33 @@ class DerivBot:
         exit_spot   = float(contract.get("exit_tick",   contract.get("exit_spot",   0.0)) or 0.0)
         date_expiry = str(contract.get("date_expiry", ""))
 
-        self.risk_manager.record_result(
-            symbol        = SYMBOL,
-            direction     = self._pending_direction,
-            stake         = self._pending_stake,
-            duration      = self._pending_duration,
-            profit        = profit,
-            indicators    = self._pending_indicators,
-            contract_info = {
-                "contract_id":  self._open_contract_id,
-                "buy_price":    self._pending_buy_price,
-                "payout":       self._pending_payout,
-                "date_start":   self._pending_date_start,
-                "entry_spot":   entry_spot,
-                "exit_spot":    exit_spot,
-                "date_expiry":  date_expiry,
-            },
-        )
-
-        self._in_trade         = False
-        self._open_contract_id = None
-        self._buy_timestamp    = 0.0   # P7: limpar após contrato encerrado
-        self._pending_buy_price  = 0.0
-        self._pending_payout     = 0.0
-        self._pending_date_start = ""
+        try:
+            self.risk_manager.record_result(
+                symbol        = SYMBOL,
+                direction     = self._pending_direction,
+                stake         = self._pending_stake,
+                duration      = self._pending_duration,
+                profit        = profit,
+                indicators    = self._pending_indicators,
+                contract_info = {
+                    "contract_id":  self._open_contract_id,
+                    "buy_price":    self._pending_buy_price,
+                    "payout":       self._pending_payout,
+                    "date_start":   self._pending_date_start,
+                    "entry_spot":   entry_spot,
+                    "exit_spot":    exit_spot,
+                    "date_expiry":  date_expiry,
+                },
+            )
+        except Exception as exc:
+            print(f"[BOT] Erro ao registrar resultado: {exc}")
+        finally:
+            self._in_trade           = False
+            self._open_contract_id   = None
+            self._buy_timestamp      = 0.0   # P7: limpar após contrato encerrado
+            self._pending_buy_price  = 0.0
+            self._pending_payout     = 0.0
+            self._pending_date_start = ""
 
     # ─────────────────────────────────────────────────────────
     #  P9 — Watchdog de heartbeat

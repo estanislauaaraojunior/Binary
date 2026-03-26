@@ -902,7 +902,9 @@ document.getElementById("btn-stop-bot").addEventListener("click", () => {
 // ─── Limpar Dados ─────────────────────────────────────────────────
 document.getElementById("btn-clear-data").addEventListener("click", async () => {
   if (!confirm(
-    "⚠️ Isso apagará TODAS as operações do Firestore e todos os ticks do Realtime DB.\n\nEssa ação é irreversível. Confirmar?"
+    "⚠️ Isso apagará TODAS as operações do Firestore, todos os ticks do Realtime DB " +
+    "e os arquivos locais do servidor (ticks.csv, dataset.csv, operacoes_log.csv, modelos).\n\n" +
+    "Essa ação é irreversível. Confirmar?"
   )) return;
 
   const btn = document.getElementById("btn-clear-data");
@@ -926,13 +928,16 @@ document.getElementById("btn-clear-data").addEventListener("click", async () => 
       await realtimeDB.ref(`ticks/${SYMBOL}`).remove();
     }
 
+    // Envia comando ao bot_agent para limpar arquivos locais no servidor
+    await sendBotCommand("clear_local_data");
+
     // Limpa estado local e re-renderiza
     allOps   = [];
     allTicks = [];
     updateSidebarInfo();
     renderAll();
 
-    alert("✅ Dados apagados com sucesso.");
+    alert("✅ Dados apagados com sucesso (Firebase + arquivos locais do servidor).");
   } catch (e) {
     console.error("[LimparDados]", e);
     alert("Erro ao apagar dados: " + e.message);

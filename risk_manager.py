@@ -171,7 +171,9 @@ class RiskManager:
         )
 
         # P15: Colunas extras no log
-        drawdown_pct     = round((self.balance - self._initial_balance) / self._initial_balance * 100, 2)
+        drawdown_pct     = round(
+            (self.balance - self._initial_balance) / self._initial_balance * 100, 2
+        ) if self._initial_balance != 0 else 0.0
         win_rate_recent  = (
             round(sum(self._recent_results) / len(self._recent_results) * 100, 1)
             if self._recent_results else ""
