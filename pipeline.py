@@ -733,6 +733,12 @@ def main() -> None:
 
     _banner(args.history_count, args.min_ticks, args.retrain_interval, is_demo)
 
+    # ── DASHBOARD: Sobe servidor local em thread daemon ───────────
+    import server as _srv
+    _srv.set_embedded(stop_callback=lambda: os.kill(os.getpid(), signal.SIGINT))
+    threading.Thread(target=_srv.start_server, daemon=True, name="Dashboard").start()
+    print("[DASHBOARD] http://localhost:8080")
+
     # ── Handler global de Ctrl+C ───────────────────────────────
     def _handle_interrupt(sig, frame) -> None:
         print("\n\n[PIPELINE] Encerrando tudo... aguarde.")

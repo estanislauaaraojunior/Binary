@@ -16,3 +16,8 @@ torch>=2.0.0
 # Dados
 pandas>=2.1.0
 numpy>=1.26.0
+
+# Dashboard local (servidor FastAPI)
+fastapi>=0.111.0
+uvicorn>=0.29.0
+aiofiles>=23.0

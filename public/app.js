@@ -1,37 +1,30 @@
 // ══════════════════════════════════════════════════════════════════
-//  app.js — Deriv Bot Dashboard (Firebase Web)
-//  Lê operações do Firestore (coll: "operacoes") e ticks do RTDB
-//  (path: "ticks/R_100") e renderiza todos os gráficos via Plotly.
+//  app.js — Deriv Bot Dashboard (API Local + WebSocket)
+//  Lê operações de /api/operacoes e ticks de /api/ticks via WS.
+//  Firebase Auth mantida para autenticação do painel de controle.
 // ══════════════════════════════════════════════════════════════════
 
-// ─── Firebase config ──────────────────────────────────────────────
-// IMPORTANTE: substitua YOUR_API_KEY e YOUR_APP_ID pelos valores reais.
-// Firebase Console → Configurações do Projeto → Seus Aplicativos → </> Web
+// ─── Firebase config (Auth only) ─────────────────────────────────
 const FIREBASE_CONFIG = {
   apiKey:            "AIzaSyB2V6OexEutzvKDvoInBNXFveD_WTfDCCg",
   authDomain:        "standeriv.firebaseapp.com",
-  databaseURL:       "https://standeriv-default-rtdb.firebaseio.com",
   projectId:         "standeriv",
   storageBucket:     "standeriv.firebasestorage.app",
   messagingSenderId: "490830442652",
   appId:             "1:490830442652:web:abfb2524f54361bfd03d59",
-  measurementId:     "G-CLMQ8LBWL0",
 };
 
-const SYMBOL    = "R_100";   // mesmo que config.py → SYMBOL
-const MAX_OPS   = 500;       // máximo de operações carregadas
+const MAX_OPS   = 500;
 const EMA_FAST  = 9;
 const EMA_SLOW  = 21;
 const BB_PERIOD = 20;
 const BB_STD    = 2.0;
 
 // ─── Estado global ────────────────────────────────────────────────
-let allOps   = [];   // Array de operações do Firestore
-let allTicks = [];   // Array de ticks do RTDB
-let tickN    = 500;  // controlado pelo slider
-let trainMeta = null; // Metadados de treino da IA (do RTDB bot_control/train_meta)
-let _activeTickSymbol = null; // Símbolo atualmente inscrito no RTDB
-let _activeTickRef    = null; // Referência do listener de ticks ativo
+let allOps    = [];
+let allTicks  = [];
+let tickN     = 500;
+let trainMeta = null;
 // ─── Plotly layout base (dark) ────────────────────────────────────
 const LAYOUT_BASE = {
   paper_bgcolor: "#161B22",
@@ -78,6 +71,36 @@ function bollingerSeries(prices, period = 20, std = 2.0) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
+//  Parsers CSV → objetos tipados
+// ═══════════════════════════════════════════════════════════════════
+
+function parseOp(row) {
+  return {
+    ...row,
+    profit:          Number(row.profit),
+    balance_before:  Number(row.balance_before),
+    balance_after:   Number(row.balance_after),
+    stake:           row.stake,
+    ai_confidence:   row.ai_confidence != null && row.ai_confidence !== "" ? Number(row.ai_confidence) : null,
+    ai_score:        row.ai_score       != null && row.ai_score       !== "" ? Number(row.ai_score)       : null,
+    adx:             Number(row.adx)     || 0,
+    rsi:             Number(row.rsi)     || 0,
+    macd_hist:       Number(row.macd_hist) || 0,
+    drawdown_pct:    Number(row.drawdown_pct)    || 0,
+    win_rate_recent: Number(row.win_rate_recent) || 0,
+    consec_losses:   Number(row.consec_losses)   || 0,
+  };
+}
+
+function parseTick(row) {
+  return {
+    ...row,
+    epoch: Number(row.epoch),
+    price: Number(row.price),
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════
 //  Helpers
 // ═══════════════════════════════════════════════════════════════════
 
@@ -107,6 +130,7 @@ function fmtDate(ts) {
 function toDate(ts) {
   if (!ts) return null;
   if (ts instanceof Date) return ts;
+  // Firebase Timestamp compat (mantido caso dados antigos existam)
   if (ts && ts.seconds) return new Date(ts.seconds * 1000);
   return new Date(ts);
 }
@@ -624,91 +648,84 @@ document.getElementById("btn-clear").addEventListener("click", () => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  Firebase init e listeners de dados em tempo real
+//  WebSocket — conexão em tempo real com o servidor local
 // ═══════════════════════════════════════════════════════════════════
 
-let firebaseApp  = null;
-let firestoreDB  = null;
-let realtimeDB   = null;
-let firebaseAuth = null;
+let _ws = null;
 
-try {
-  firebaseApp  = firebase.initializeApp(FIREBASE_CONFIG);
-  firestoreDB  = firebase.firestore();
-  realtimeDB   = firebase.database();
-  firebaseAuth = firebase.auth();
-} catch (e) {
-  console.error("[Firebase] Falha na inicialização:", e);
-}
+function _initWebSocket() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  _ws = new WebSocket(`${proto}//${location.host}/ws`);
 
-// ── Firestore: coleção "operacoes" ────────────────────────────────
-if (firestoreDB) {
-  firestoreDB.collection("operacoes")
-    .orderBy("timestamp")
-    .limitToLast(MAX_OPS)
-    .onSnapshot(
-      snap => {
-        allOps = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        allOps.sort((a, b) => (toDate(a.timestamp) || 0) - (toDate(b.timestamp) || 0));
-        updateSidebarStatus("firestore", true);
-        populateSymbolFilter();
-        populateDateFilters();
-        renderAll();
-      },
-      err => {
-        console.error("[Firestore]", err);
-        updateSidebarStatus("firestore", false);
-      }
-    );
-}
+  _ws.onopen = () => {
+    updateSidebarStatus("ws", true);
+    console.log("[WS] Conectado");
+  };
 
-// ── RTDB: ticks/{SYMBOL} — inscrição dinâmica (segue o símbolo ativo do bot) ─────
-function _subscribeToTicks(symbol) {
-  if (!realtimeDB || !symbol || symbol === _activeTickSymbol) return;
-  if (_activeTickRef) _activeTickRef.off("value");
-  _activeTickSymbol = symbol;
-  _activeTickRef = realtimeDB.ref(`ticks/${symbol}`).limitToLast(2000);
-  _activeTickRef.on("value",
-    snap => {
-      updateSidebarStatus("rtdb", true);
-      const val = snap.val();
-      if (!val) { allTicks = []; renderAll(); return; }
-      allTicks = Object.values(val)
-        .filter(t => t && t.price != null)
-        .sort((a, b) => (a.epoch || 0) - (b.epoch || 0));
+  _ws.onmessage = (e) => {
+    let msg;
+    try { msg = JSON.parse(e.data); } catch { return; }
+
+    if (msg.type === "ops") {
+      allOps = (msg.data || []).map(parseOp);
+      allOps.sort((a, b) => (opToDate(a) || 0) - (opToDate(b) || 0));
+      updateSidebarStatus("api", true);
+      populateSymbolFilter();
+      populateDateFilters();
       renderAll();
-    },
-    err => {
-      console.error("[RTDB]", err);
-      updateSidebarStatus("rtdb", false);
-    }
-  );
-}
-
-if (realtimeDB) {
-  // Inicia com o símbolo padrão; _updateBotStatusUI reinscreve ao receber o símbolo real
-  _subscribeToTicks(SYMBOL);
-
-  // ── RTDB: status do bot (leitura pública) ─────────────────────
-  realtimeDB.ref("bot_control/status").on("value", snap => {
-    _updateBotStatusUI(snap.val());
-  });
-
-  // ── RTDB: metadados de treino da IA ───────────────────────────
-  realtimeDB.ref("bot_control/train_meta").on(
-    "value",
-    snap => {
-      trainMeta = snap.val() || null;
+    } else if (msg.type === "ticks") {
+      allTicks = (msg.data || []).map(parseTick);
+      renderAll();
+    } else if (msg.type === "status") {
+      _updateBotStatusUI(msg.data);
+    } else if (msg.type === "train_meta") {
+      trainMeta = msg.data;
       if (document.getElementById("tab-overview").classList.contains("active")) {
         renderOverview();
       }
-    },
-    err => console.warn("[RTDB train_meta]", err.code, "— verifique database.rules.json")
-  );
+    }
+    // "ping" ignorado
+  };
+
+  _ws.onerror = () => updateSidebarStatus("ws", false);
+
+  _ws.onclose = () => {
+    updateSidebarStatus("ws", false);
+    console.log("[WS] Desconectado — reconectando em 3s…");
+    setTimeout(_initWebSocket, 3000);
+  };
 }
 
+// Fetch inicial como fallback (case WS demore a conectar)
+fetch("/api/operacoes")
+  .then(r => r.json())
+  .then(data => {
+    if (allOps.length === 0 && data.length > 0) {
+      allOps = data.map(parseOp);
+      allOps.sort((a, b) => (opToDate(a) || 0) - (opToDate(b) || 0));
+      updateSidebarStatus("api", true);
+      populateSymbolFilter();
+      populateDateFilters();
+      renderAll();
+    }
+  })
+  .catch(() => updateSidebarStatus("api", false));
+
+fetch("/api/ticks?limit=2000")
+  .then(r => r.json())
+  .then(data => { if (allTicks.length === 0) allTicks = data.map(parseTick); })
+  .catch(() => {});
+
+fetch("/api/train_meta")
+  .then(r => r.json())
+  .then(data => { trainMeta = data; })
+  .catch(() => {});
+
+// Inicia WebSocket
+_initWebSocket();
+
 // ═══════════════════════════════════════════════════════════════════
-//  Bot status UI — atualizada por listener RTDB em tempo real
+//  Bot status UI — atualizada via WebSocket
 // ═══════════════════════════════════════════════════════════════════
 
 function _updateBotStatusUI(status) {
@@ -739,7 +756,7 @@ function _updateBotStatusUI(status) {
     lastAct.textContent = status.last_action;
   }
 
-  // ── Saldo ao vivo (puxado da API Deriv pelo bot_agent) ──────────────
+  // Saldo ao vivo
   const balVal = document.getElementById("rc-balance-val");
   const balCur = document.getElementById("rc-balance-cur");
   if (balVal) {
@@ -747,14 +764,11 @@ function _updateBotStatusUI(status) {
       balVal.textContent = `$${Number(status.balance).toLocaleString("pt-BR", { minimumFractionDigits: 2 })}`;
       balVal.style.color = "var(--clr-win)";
     } else {
-      balVal.textContent = "⏳ aguardando agente…";
+      balVal.textContent = "⏳ aguardando…";
       balVal.style.color = "var(--clr-muted)";
     }
   }
   if (balCur && status.currency) balCur.textContent = status.currency;
-
-  // Reinscreve no caminho correto de ticks quando o bot muda de símbolo
-  if (status.symbol) _subscribeToTicks(status.symbol);
 
   if (startForm && stopBtn) {
     startForm.style.display = running ? "none"  : "block";
@@ -763,8 +777,18 @@ function _updateBotStatusUI(status) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  Autenticação Firebase — Email/Password
+//  Firebase Auth
 // ═══════════════════════════════════════════════════════════════════
+
+let firebaseApp  = null;
+let firebaseAuth = null;
+
+try {
+  firebaseApp  = firebase.initializeApp(FIREBASE_CONFIG);
+  firebaseAuth = firebase.auth();
+} catch (e) {
+  console.error("[Firebase] Falha na inicialização:", e);
+}
 
 if (firebaseAuth) {
   firebaseAuth.onAuthStateChanged(user => {
@@ -780,7 +804,7 @@ if (firebaseAuth) {
   });
 }
 
-// ── Helpers de modal ─────────────────────────────────────────────
+// Helpers modal
 function _openLoginModal() {
   document.getElementById("login-modal").style.display = "flex";
   setTimeout(() => document.getElementById("login-email").focus(), 80);
@@ -793,16 +817,14 @@ function _loginError(msg) {
   document.getElementById("login-error").textContent = msg;
 }
 
-// ── Login modal ───────────────────────────────────────────────────
 document.getElementById("btn-login").addEventListener("click", _openLoginModal);
 document.getElementById("btn-cancel-login").addEventListener("click", _closeLoginModal);
 
-// Fechar clicando no overlay
 document.getElementById("login-modal").addEventListener("click", e => {
   if (e.target === document.getElementById("login-modal")) _closeLoginModal();
 });
 
-// ── Google Sign-In ───────────────────────────────────────────────
+// Google Sign-In
 document.getElementById("btn-google-login").addEventListener("click", async () => {
   if (!firebaseAuth) return;
   _loginError("");
@@ -822,7 +844,7 @@ document.getElementById("btn-google-login").addEventListener("click", async () =
   }
 });
 
-// ── Email/Password ────────────────────────────────────────────────
+// Email/Password
 document.getElementById("btn-do-login").addEventListener("click", async () => {
   const email    = document.getElementById("login-email").value.trim();
   const password = document.getElementById("login-password").value;
@@ -848,28 +870,30 @@ document.getElementById("login-password").addEventListener("keydown", e => {
 });
 
 document.getElementById("btn-logout").addEventListener("click", () => {
-  firebaseAuth.signOut();
+  if (firebaseAuth) firebaseAuth.signOut();
 });
 
 // ═══════════════════════════════════════════════════════════════════
-//  Controle do bot — envio de comandos via RTDB
+//  Controle do bot via API local
 // ═══════════════════════════════════════════════════════════════════
 
 async function sendBotCommand(action, args = {}) {
-  if (!firebaseAuth || !firebaseAuth.currentUser) {
+  if (firebaseAuth && !firebaseAuth.currentUser) {
     alert("Você precisa estar autenticado para controlar o bot.");
     return;
   }
-  if (!realtimeDB) return;
   try {
-    await realtimeDB.ref("bot_control/commands").push({
-      action,
-      args,
-      timestamp: firebase.database.ServerValue.TIMESTAMP,
-      executed:  false,
-      sent_by:   firebaseAuth.currentUser.email,
+    const res = await fetch("/api/command", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ action, args }),
     });
-    console.log(`[Dashboard] Comando enviado: ${action}`);
+    const data = await res.json();
+    if (!data.ok) {
+      console.error("[Dashboard] Comando falhou:", data.error);
+      alert("Erro ao enviar comando: " + (data.error || "erro desconhecido"));
+    }
+    console.log(`[Dashboard] Comando: ${action}`);
   } catch (e) {
     console.error("[Dashboard] Erro:", e);
     alert("Erro ao enviar comando: " + e.message);
@@ -885,7 +909,6 @@ document.getElementById("btn-start-bot").addEventListener("click", () => {
   const mode = document.getElementById("rc-mode").value;
   if (mode === "real" &&
       !confirm("⚠️ Modo REAL: isso usará DINHEIRO REAL na sua conta Deriv. Confirmar?")) return;
-  // balance não é enviado — bot_agent usa o saldo real da API Deriv
   sendBotCommand("start", {
     mode,
     hist_count:    parseInt(document.getElementById("rc-hist").value)       || 500,
@@ -905,47 +928,27 @@ document.getElementById("btn-stop-bot").addEventListener("click", () => {
 // ─── Limpar Dados ─────────────────────────────────────────────────
 document.getElementById("btn-clear-data").addEventListener("click", async () => {
   if (!confirm(
-    "⚠️ Isso apagará TODAS as operações do Firestore, todos os ticks do Realtime DB " +
-    "e os arquivos locais do servidor (ticks.csv, dataset.csv, operacoes_log.csv, modelos).\n\n" +
+    "⚠️ Isso apagará TODOS os arquivos locais do servidor:\n" +
+    "ticks.csv, operacoes_log.csv, dataset.csv e modelos treinados.\n\n" +
     "Essa ação é irreversível. Confirmar?"
   )) return;
 
   const btn = document.getElementById("btn-clear-data");
-  btn.disabled = true;
+  btn.disabled    = true;
   btn.textContent = "⏳ Apagando…";
 
   try {
-    // Apaga operações no Firestore em lotes de 500
-    if (firestoreDB) {
-      let snap = await firestoreDB.collection("operacoes").limit(500).get();
-      while (!snap.empty) {
-        const batch = firestoreDB.batch();
-        snap.docs.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-        snap = await firestoreDB.collection("operacoes").limit(500).get();
-      }
-    }
-
-    // Apaga ticks no RTDB
-    if (realtimeDB) {
-      await realtimeDB.ref(`ticks/${SYMBOL}`).remove();
-    }
-
-    // Envia comando ao bot_agent para limpar arquivos locais no servidor
     await sendBotCommand("clear_local_data");
-
-    // Limpa estado local e re-renderiza
     allOps   = [];
     allTicks = [];
     updateSidebarInfo();
     renderAll();
-
-    alert("✅ Dados apagados com sucesso (Firebase + arquivos locais do servidor).");
+    alert("✅ Dados apagados com sucesso.");
   } catch (e) {
     console.error("[LimparDados]", e);
     alert("Erro ao apagar dados: " + e.message);
   } finally {
-    btn.disabled = false;
+    btn.disabled    = false;
     btn.textContent = "🗑️ Limpar Dados";
   }
 });
