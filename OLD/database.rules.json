@@ -1,0 +1,28 @@
+{
+  "rules": {
+    "ticks": {
+      "$symbol": {
+        ".read": true,
+        ".write": "auth != null"
+      }
+    },
+    "bot_control": {
+      "status": {
+        ".read": true,
+        ".write": false
+      },
+      "train_meta": {
+        ".read": true,
+        ".write": false
+      },
+      "commands": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+    "$other": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}
