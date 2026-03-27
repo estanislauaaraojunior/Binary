@@ -44,7 +44,6 @@ from config import (
     TRANSFORMER_D_MODEL, TRANSFORMER_N_HEADS, TRANSFORMER_N_LAYERS,
     TRANSFORMER_DROPOUT, TRANSFORMER_EPOCHS, TRANSFORMER_BATCH_SIZE,
     TRANSFORMER_LR, TRANSFORMER_PATIENCE,
-    USE_FIREBASE,
 )
 
 # Importa TFT (opcional — requer torch; fallback gracioso se não instalado)
@@ -349,9 +348,6 @@ def train(dataset_path: str, output_path: str, test_ratio: float, gap_ratio: flo
             }
             joblib.dump(tft_payload, TRANSFORMER_MODEL_PATH)
             print(f"[TREINO] TFT salvo em '{TRANSFORMER_MODEL_PATH}'")
-            if USE_FIREBASE:
-                from firebase_client import upload_model
-                upload_model(TRANSFORMER_MODEL_PATH, os.path.basename(TRANSFORMER_MODEL_PATH))
 
             # Comparação final de todas as arquiteturas
             all_aucs = [
@@ -378,9 +374,6 @@ def train(dataset_path: str, output_path: str, test_ratio: float, gap_ratio: flo
     }
     joblib.dump(payload, output_path)
     print(f"[TREINO] Modelo salvo em '{output_path}'")
-    if USE_FIREBASE:
-        from firebase_client import upload_model
-        upload_model(output_path, os.path.basename(output_path))
 
     # ── Modelo de duração dinâmica (RF clássico — complementa o TFT) ────────
     if has_dur and y_dur_train is not None:
@@ -411,9 +404,6 @@ def train(dataset_path: str, output_path: str, test_ratio: float, gap_ratio: flo
         }
         joblib.dump(dur_payload, DURATION_MODEL_PATH)
         print(f"[TREINO] Modelo de duração (RF) salvo em '{DURATION_MODEL_PATH}'")
-        if USE_FIREBASE:
-            from firebase_client import upload_model
-            upload_model(DURATION_MODEL_PATH, os.path.basename(DURATION_MODEL_PATH))
     else:
         print("[TREINO] Coluna 'optimal_duration' não encontrada — regenere o dataset antes de retreinar.")
 

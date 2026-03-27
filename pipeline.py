@@ -52,15 +52,8 @@ from risk_manager import RiskManager
 
 _DEFAULT_HISTORY_COUNT = 500  # ticks históricos baixados da API ao iniciar
 _DEFAULT_MIN_TICKS     = 500  # mín. no CSV antes do 1º treino (igual ao histórico)
-_DEFAULT_RETRAIN_MIN   = 60   # fallback de re-treino máximo (a IA decide antes)
-_DEFAULT_RESCAN_MIN    = 30   # intervalo de re-scan de símbolo em minutos
+_DEFAULT_RETRAIN_MIN   = 10   # intervalo de re-treino em minutos
 _WS_URL = f"wss://ws.derivws.com/websockets/v3?app_id={APP_ID}"
-
-# Limiares do re-treino adaptativo
-_RETRAIN_NEW_TICKS    = 500   # retreina ao acumular N novos ticks desde o último re-treino
-_RETRAIN_WIN_RATE_MIN = 0.40  # retreina se win rate cair abaixo de 40%
-_RETRAIN_CONF_MIN     = 0.56  # retreina se confiança média da IA cair abaixo de 56%
-_RETRAIN_COOLDOWN_MIN = 5     # aguarda ao menos 5 min entre retreinos consecutivos
 
 # Nomes descritivos dos índices sintéticos da Deriv
 _SYMBOL_NAMES: dict = {
@@ -97,26 +90,6 @@ def _symbol_display(symbol: str) -> str:
 
 # Evento global: sinaliza encerramento a todas as threads
 _shutdown = threading.Event()
-
-# Referência global ao coletor ativo (permite encerrá-lo do signal handler)
-_active_collector = None
-
-# Referência global ao bot ativo e coordenação de troca de símbolo
-_active_bot = None
-_symbol_change_event = threading.Event()
-_pending_symbol: str = ""
-
-# Contador global de treinos realizados (thread-safe)
-_train_count      = 0
-_train_count_lock = threading.Lock()
-
-
-def _inc_train_count() -> int:
-    """Incrementa e retorna o número total de treinos realizados."""
-    global _train_count
-    with _train_count_lock:
-        _train_count += 1
-        return _train_count
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -315,27 +288,6 @@ def _detect_trending_symbol(no_scan: bool = False) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────
-#  Propagação de símbolo
-# ─────────────────────────────────────────────────────────────────
-
-def _update_active_symbol(symbol: str) -> None:
-    """Propaga o novo símbolo para todos os módulos que o importaram."""
-    import config as _cfg
-    import executor, strategy, dataset_builder, train_model
-    for _mod in (_cfg, executor, strategy, dataset_builder, train_model):
-        if hasattr(_mod, "SYMBOL"):
-            setattr(_mod, "SYMBOL", symbol)
-    globals()["SYMBOL"] = symbol
-    # Persiste o símbolo ativo para que bot_agent publique no RTDB
-    try:
-        _sym_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "current_symbol.txt")
-        with open(_sym_path, "w") as _f:
-            _f.write(symbol)
-    except Exception:
-        pass
-
-
-# ─────────────────────────────────────────────────────────────────
 #  FASE 0 — Busca de ticks históricos via API Deriv
 # ─────────────────────────────────────────────────────────────────
 
@@ -448,8 +400,7 @@ def _banner(history_count: int, min_ticks: int, retrain_min: int, demo: bool) ->
     print(f"  Símbolo           : {_symbol_display(SYMBOL)}")
     print(f"  Ticks históricos  : {history_count:,}")
     print(f"  Ticks p/ treino   : {min_ticks:,}")
-    print(f"  Re-treino         : adaptativo (decidido pela IA)")
-    print(f"  Re-treino máx.    : {retrain_min} min (fallback)")
+    print(f"  Re-treino a cada  : {retrain_min} min")
     print(f"  Pressione Ctrl+C para encerrar tudo")
     print("=" * 60)
 
@@ -498,13 +449,11 @@ class _CollectorThread(threading.Thread):
                     on_close=self._on_close,
                 )
                 self._ws = ws
-                ws.run_forever()
+                ws.run_forever(reconnect=5)
             except Exception as exc:
                 if not _shutdown.is_set():
                     print(f"\n[COLETOR] Exceção inesperada: {exc} — reconectando em 5s")
-            # Aguarda 5s antes de reconectar, interruptível pelo shutdown
-            if not _shutdown.is_set():
-                _shutdown.wait(timeout=5)
+                    time.sleep(5)
 
     def stop(self) -> None:
         if self._ws:
@@ -541,12 +490,6 @@ class _CollectorThread(threading.Thread):
 
             with open(TICKS_CSV, "a", newline="") as f:
                 csv.writer(f).writerow([epoch, dt_str, SYMBOL, price])
-
-            # Firebase: envia tick ao Realtime Database em background
-            from config import USE_FIREBASE
-            if USE_FIREBASE:
-                from firebase_client import push_tick_async
-                push_tick_async(SYMBOL, epoch, price, dt_str)
 
             print(
                 f"\r[COLETOR] Ticks: {self._local_count:>7,} | "
@@ -638,7 +581,6 @@ def _reset_ai_predictor() -> None:
     """
     Reseta o singleton do ai_predictor para que o novo model.pkl
     seja carregado na próxima inferência (sem reiniciar o bot).
-    Também limpa o buffer de confiança para iniciar janela fresca.
     """
     try:
         import ai_predictor
@@ -648,77 +590,38 @@ def _reset_ai_predictor() -> None:
         ai_predictor._dur_model          = None
         ai_predictor._dur_model_loaded   = False
         ai_predictor._dur_model_features = []
-        ai_predictor.clear_confidence_buffer()
         print("[RE-TREINO] Singleton da IA resetado — novo modelo ativo na próxima predição.")
     except Exception:
         pass
 
 
-def _adaptive_retrain_loop(risk_mgr, max_min: int) -> None:
+def _retrain_loop(interval_min: int) -> None:
     """
-    Thread de re-treino adaptativo — a IA decide quando retreinar.
+    Thread de re-treino periódico.
 
-    Avalia a cada 30s os seguintes gatilhos (qualquer um dispara o re-treino):
-      - Novos ticks acumulados  >= _RETRAIN_NEW_TICKS  (modelo desatualizado por volume)
-      - Win rate recente        <  _RETRAIN_WIN_RATE_MIN (modelo perdendo acurácia)
-      - Confiança média da IA   <  _RETRAIN_CONF_MIN     (modelo incerto nas predições)
-      - Tempo máximo            >= max_min               (fallback de segurança)
-
-    O bot nunca para durante o processo: a substituição do model.pkl é atômica.
-    Cooldown mínimo de _RETRAIN_COOLDOWN_MIN entre retreinos consecutivos.
+    Aguarda `interval_min` minutos, reconstrói dataset em arquivo
+    temporário e substitui model.pkl atomicamente (os.replace).
+    O bot nunca para durante o processo.
     """
-    import ai_predictor
-
-    cooldown_sec  = _RETRAIN_COOLDOWN_MIN * 60
-    max_sec       = max_min * 60
-    last_retrain  = time.time()
-    ticks_at_last = _count_ticks()
-
-    print(
-        f"\n[PIPELINE] Fase 5: Re-treino adaptativo ativado "
-        f"(gatilhos: {_RETRAIN_NEW_TICKS} ticks | "
-        f"win rate < {_RETRAIN_WIN_RATE_MIN:.0%} | "
-        f"confiança IA < {_RETRAIN_CONF_MIN:.0%})."
-    )
+    interval_sec = interval_min * 60
 
     while not _shutdown.is_set():
-        _shutdown.wait(timeout=30)
+        # Dorme em fatias de 5s para responder rápido ao shutdown
+        elapsed = 0
+        while elapsed < interval_sec and not _shutdown.is_set():
+            time.sleep(5)
+            elapsed += 5
+
         if _shutdown.is_set():
             break
 
-        elapsed = time.time() - last_retrain
-        if elapsed < cooldown_sec:
-            continue
-
-        # ── Avalia gatilhos ──────────────────────────────────
-        trigger = None
-
-        current_ticks = _count_ticks()
-        new_ticks = current_ticks - ticks_at_last
-        if new_ticks >= _RETRAIN_NEW_TICKS:
-            trigger = f"novos ticks ({new_ticks:,} ≥ {_RETRAIN_NEW_TICKS:,})"
-
-        if trigger is None:
-            wr = risk_mgr.win_rate_recent
-            if wr is not None and wr < _RETRAIN_WIN_RATE_MIN:
-                trigger = f"win rate ({wr:.1%} < {_RETRAIN_WIN_RATE_MIN:.0%})"
-
-        if trigger is None:
-            avg_conf = ai_predictor.get_avg_confidence()
-            if avg_conf is not None and avg_conf < _RETRAIN_CONF_MIN:
-                trigger = f"confiança IA ({avg_conf:.1%} < {_RETRAIN_CONF_MIN:.0%})"
-
-        if trigger is None and elapsed >= max_sec:
-            trigger = f"intervalo máximo ({max_min} min)"
-
-        if trigger is None:
-            continue
-
-        # ── Executa re-treino ────────────────────────────────
-        print(f"\n[RE-TREINO] Gatilho: {trigger}")
         n_ticks = _count_ticks()
-        print(f"[RE-TREINO] Iniciando re-treino adaptativo ({n_ticks:,} ticks disponíveis)...")
+        print(
+            f"\n[RE-TREINO] Iniciando re-treino automático "
+            f"({n_ticks:,} ticks disponíveis)..."
+        )
 
+        # Usa arquivos temporários para não corromper os arquivos em uso
         tmp_dataset = DATASET_CSV + ".tmp"
         tmp_model   = AI_MODEL_PATH + ".new"
 
@@ -728,15 +631,10 @@ def _adaptive_retrain_loop(risk_mgr, max_min: int) -> None:
             # Substituição atômica: o bot nunca lê um arquivo pela metade
             os.replace(tmp_model, AI_MODEL_PATH)
             _reset_ai_predictor()
-            count = _inc_train_count()
-            print(f"[RE-TREINO] model.pkl atualizado — novo modelo ativo. (treino #{count})")
-            try:
-                from config import USE_FIREBASE
-                if USE_FIREBASE:
-                    from firebase_client import write_train_meta_async
-                    write_train_meta_async(count, _count_ticks())
-            except Exception:
-                pass
+            print(
+                f"[RE-TREINO] model.pkl atualizado com sucesso. "
+                f"Próximo re-treino em {interval_min} min."
+            )
         else:
             print("[RE-TREINO] Falhou — bot continua com o modelo anterior.")
 
@@ -747,50 +645,6 @@ def _adaptive_retrain_loop(risk_mgr, max_min: int) -> None:
                     os.remove(tmp)
                 except OSError:
                     pass
-
-        last_retrain  = time.time()
-        ticks_at_last = _count_ticks()
-
-
-# ─────────────────────────────────────────────────────────────────
-#  FASE 6b — Re-scan periódico de símbolo
-# ─────────────────────────────────────────────────────────────────
-
-def _rescan_loop(interval_min: int) -> None:
-    """
-    Thread de re-scan periódico de símbolo.
-
-    A cada `interval_min` minutos, reavalia qual índice tem maior tendência.
-    Se um símbolo mais rentável for detectado, sinaliza o pipeline para trocar.
-    """
-    global _pending_symbol
-    interval_sec = interval_min * 60
-
-    while not _shutdown.is_set():
-        elapsed = 0
-        while elapsed < interval_sec and not _shutdown.is_set():
-            time.sleep(5)
-            elapsed += 5
-
-        if _shutdown.is_set():
-            break
-
-        current = globals().get("SYMBOL", SYMBOL)
-        print(f"\n[RE-SCAN] Reavaliando mercado (símbolo atual: {current})...")
-        detected = _detect_trending_symbol()
-
-        if detected != current:
-            print(
-                f"[RE-SCAN] ✔ Novo símbolo eleito: {_symbol_display(detected)} "
-                f"(era: {current}) — iniciando troca."
-            )
-            _pending_symbol = detected
-            _symbol_change_event.set()
-            # Pausa o loop até que a troca seja consumida pelo bot loop
-            while _symbol_change_event.is_set() and not _shutdown.is_set():
-                time.sleep(2)
-        else:
-            print(f"[RE-SCAN] Símbolo atual {_symbol_display(current)} ainda é o melhor.")
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -861,13 +715,6 @@ def main() -> None:
         "--no-scan", action="store_true",
         help="Pula o scan de tendência — usa o SYMBOL definido em config.py diretamente.",
     )
-    parser.add_argument(
-        "--rescan-interval", type=int, default=_DEFAULT_RESCAN_MIN, metavar="MIN",
-        help=(
-            f"Intervalo em minutos entre re-scans de símbolo (padrão: {_DEFAULT_RESCAN_MIN}). "
-            "0 desativa a troca dinâmica. Ignorado se --no-scan for passado."
-        ),
-    )
 
     args = parser.parse_args()
 
@@ -890,21 +737,22 @@ def main() -> None:
     def _handle_interrupt(sig, frame) -> None:
         print("\n\n[PIPELINE] Encerrando tudo... aguarde.")
         _shutdown.set()
-        if _active_collector is not None:
-            _active_collector.stop()
-        if _active_bot is not None:
-            _active_bot.stop()
         sys.exit(0)
 
-    signal.signal(signal.SIGINT,  _handle_interrupt)
-    signal.signal(signal.SIGTERM, _handle_interrupt)  # necessário para o bot_agent parar via RTDB
+    signal.signal(signal.SIGINT, _handle_interrupt)
 
     # ── PRÉ-FASE: Detectar índice com maior tendência ──────────
     import config as _cfg
     detected = _detect_trending_symbol(no_scan=args.no_scan)
     if detected != _cfg.SYMBOL:
         print(f"[TENDÊNCIA] Símbolo alterado: {_cfg.SYMBOL} → {detected}")
-        _update_active_symbol(detected)
+        # Propaga o novo símbolo para todos os módulos que o importaram
+        import executor, strategy, dataset_builder, train_model
+        for _mod in (_cfg, executor, strategy, dataset_builder, train_model):
+            if hasattr(_mod, "SYMBOL"):
+                setattr(_mod, "SYMBOL", detected)
+        # Atualiza a variável deste módulo (importada com 'from config import SYMBOL')
+        globals()["SYMBOL"] = detected
 
     # ── FASE 0: Histórico inicial ──────────────────────────────
     if not args.skip_collect:
@@ -915,12 +763,10 @@ def main() -> None:
         print("[PIPELINE] Fase 0: --skip-collect ativo — histórico ignorado.")
 
     # ── FASE 1: Coletor ────────────────────────────────────────
-    global _active_collector, _active_bot
     collector: Optional[_CollectorThread] = None
     if not args.skip_collect:
         collector = _CollectorThread()   # já carrega _last_epoch do histórico gravado
         collector.start()
-        _active_collector = collector
         print("[PIPELINE] Fase 1: Coletor iniciado em background (sem duplicatas).")
     else:
         n_existing = _count_ticks()
@@ -946,121 +792,25 @@ def main() -> None:
             print("\n[PIPELINE] Treino inicial falhou. Encerrando.")
             _shutdown.set()
             sys.exit(1)
-        count = _inc_train_count()
-        try:
-            from config import USE_FIREBASE
-            if USE_FIREBASE:
-                from firebase_client import write_train_meta_async
-                write_train_meta_async(count, _count_ticks())
-        except Exception:
-            pass
 
-    # ── Cria RiskManager antes das threads (compartilhado entre retrain e bot) ──
-    risk_manager = RiskManager(initial_balance=args.balance)
-
-    # ── FASE 5: Re-treino adaptativo ────────────────────────────────────────────
+    # ── FASE 5: Re-treino periódico ────────────────────────────
     retrain_thread = threading.Thread(
-        target=_adaptive_retrain_loop,
-        args=(risk_manager, args.retrain_interval),
+        target=_retrain_loop,
+        args=(args.retrain_interval,),
         daemon=True,
         name="Retrain",
     )
     retrain_thread.start()
+    print(
+        f"\n[PIPELINE] Fase 5: Re-treino automático agendado "
+        f"a cada {args.retrain_interval} min."
+    )
 
-    # ── Re-scan periódico de símbolo ───────────────────────────
-    if not args.no_scan and args.rescan_interval > 0:
-        rescan_thread = threading.Thread(
-            target=_rescan_loop,
-            args=(args.rescan_interval,),
-            daemon=True,
-            name="Rescan",
-        )
-        rescan_thread.start()
-        print(
-            f"[PIPELINE] Re-scan de símbolo agendado "
-            f"a cada {args.rescan_interval} min."
-        )
-    else:
-        print("[PIPELINE] Re-scan de símbolo desativado (--no-scan ou --rescan-interval 0).")
-
-    # ── FASE 6: Bot (loop reiniciável por mudança de símbolo) ───────────
+    # ── FASE 6: Bot ────────────────────────────────────────────
     print("\n[PIPELINE] Fase 6: Iniciando bot de trading...\n")
-
-    while not _shutdown.is_set():
-        bot = DerivBot(risk_manager=risk_manager, demo=is_demo)
-        _active_bot = bot
-
-        bot_thread = threading.Thread(target=bot.run, daemon=True, name="Bot")
-        bot_thread.start()
-
-        # Aguarda término do bot OU sinal de troca de símbolo
-        while not _shutdown.is_set() and bot_thread.is_alive():
-            if _symbol_change_event.wait(timeout=5):
-                break  # saiu do inner-loop; trata abaixo
-
-        # Token inválido → encerra o pipeline
-        if bot.invalid_token:
-            print("\n[PIPELINE] Encerrado: token inválido. Atualize DERIV_TOKEN no .env e reinicie.")
-            _shutdown.set()
-            if collector is not None:
-                collector.stop()
-            sys.exit(1)
-
-        if _shutdown.is_set():
-            bot.stop()
-            break
-
-        if not _symbol_change_event.is_set():
-            # Bot encerrou espontaneamente (ex.: erro WebSocket esgotou retries)
-            print("[PIPELINE] Bot encerrado inesperadamente. Reiniciando em 10s...")
-            _shutdown.wait(timeout=10)
-            continue
-
-        # ── Troca de símbolo ──────────────────────────────────────────
-        _symbol_change_event.clear()
-        new_sym = _pending_symbol
-        old_sym = globals().get("SYMBOL", SYMBOL)
-
-        if not new_sym or new_sym == old_sym:
-            # Sem mudança real; continua com o mesmo bot
-            continue
-
-        print(f"\n[PIPELINE] Trocando símbolo: {old_sym} → {new_sym}")
-
-        # 1. Para bot e coletor atuais
-        bot.stop()
-        bot_thread.join(timeout=10)
-        if collector is not None:
-            collector.stop()
-
-        # 2. Atualiza símbolo em todos os módulos
-        _update_active_symbol(new_sym)
-
-        # 3. Descarta os ticks anteriores e inicia coleta zerada
-        if os.path.exists(TICKS_CSV):
-            os.remove(TICKS_CSV)
-            print(f"[PIPELINE] Ticks de '{old_sym}' descartados (troca de símbolo).")
-
-        # 4. Reinicia histórico + coletor para o novo símbolo
-        if not args.skip_collect:
-            n_hist = _fetch_historical_ticks(args.history_count)
-            if n_hist == 0:
-                print("[PIPELINE] Aviso: histórico não obtido — coletor ao vivo cobrirá os dados.")
-            collector = _CollectorThread()
-            collector.start()
-            _active_collector = collector
-            print(f"[PIPELINE] Coletor reiniciado para {_symbol_display(new_sym)}.")
-
-        # 5. Aguarda ticks mínimos e retreina com os novos dados
-        _wait_for_ticks(args.min_ticks)
-        success = _run_training()
-        if success:
-            _reset_ai_predictor()
-        else:
-            print("[PIPELINE] Retreino pós-troca falhou — continuando com modelo anterior.")
-
-        print(f"\n[PIPELINE] ✔ Reiniciando bot com {_symbol_display(new_sym)}.\n")
-        # loop continua → cria novo DerivBot com o símbolo atualizado
+    risk_manager = RiskManager(initial_balance=args.balance)
+    bot = DerivBot(risk_manager=risk_manager, demo=is_demo)
+    bot.run()  # bloqueia até Ctrl+C
 
 
 if __name__ == "__main__":
