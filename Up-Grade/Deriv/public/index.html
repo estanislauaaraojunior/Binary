@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deriv Bot — Dashboard</title>
+  <link rel="stylesheet" href="/style.css" />
+
+  <!-- Firebase Auth compat (apenas autenticação) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+
+  <!-- Plotly para gráficos -->
+  <script src="https://cdn.plot.ly/plotly-2.32.0.min.js"></script>
+</head>
+<body>
+
+<div id="app">
+
+  <!-- ═══════════════════════════════════════════════════════════
+       SIDEBAR
+  ════════════════════════════════════════════════════════════ -->
+  <aside id="sidebar">
+
+    <!-- Brand -->
+    <div class="sidebar-brand">
+      <span class="brand-title">⚡ Deriv Bot</span>
+      <span class="brand-sub">Dashboard de Trading</span>
+    </div>
+
+    <!-- Conexão -->
+    <div class="sidebar-section">
+      <div class="section-label">Conexão</div>
+      <div class="status-row" id="status-api">
+        <span class="dot dot-loading">●</span>
+        <span>API Local</span>
+      </div>
+      <div class="status-row" id="status-ws">
+        <span class="dot dot-loading">●</span>
+        <span>WebSocket</span>
+      </div>
+    </div>
+
+    <!-- Info -->
+    <div class="sidebar-section">
+      <div class="section-label">Dados carregados</div>
+      <div class="info-text" id="ops-info">— operações</div>
+      <div class="info-text" id="ticks-info">— ticks</div>
+    </div>
+
+    <!-- Slider de ticks (Tab Técnica) -->
+    <div class="sidebar-section">
+      <div class="section-label">Ticks visíveis (gráfico)</div>
+      <input type="range" id="tick-slider" min="50" max="2000" value="500" step="50" />
+      <div class="slider-value">Últimos <span id="tick-slider-val">500</span> ticks</div>
+    </div>
+
+    <!-- Status do bot -->
+    <div class="sidebar-section">
+      <div class="section-label">Status do Bot</div>
+      <div class="bot-status-badge">
+        <span class="dot dot-loading" id="bot-dot">●</span>
+        <span id="bot-status-text">Verificando…</span>
+      </div>
+      <div class="info-text" id="bot-heartbeat"></div>
+      <div class="info-text" id="bot-last-action"></div>
+    </div>
+
+    <!-- Auth: prompt de login (quando não autenticado) -->
+    <div class="sidebar-section" id="bot-auth-prompt">
+      <div class="section-label">Controle do Bot</div>
+      <div class="remote-hint">
+        Faça login para poder iniciar, parar ou limpar dados.
+      </div>
+      <button class="btn btn-primary full-width" id="btn-login" style="margin-top:8px">
+        🔐 Entrar
+      </button>
+    </div>
+
+    <!-- Controles do bot (quando autenticado) -->
+    <div class="sidebar-section" id="bot-controls" style="display:none">
+      <div class="section-label">Controle do Bot</div>
+
+      <!-- Saldo ao vivo -->
+      <div class="ctrl-field">
+        <label>Saldo ao Vivo</label>
+        <div class="balance-display">
+          <span id="rc-balance-val">⏳ aguardando…</span>
+          <span class="balance-cur" id="rc-balance-cur">USD</span>
+        </div>
+      </div>
+
+      <!-- Formulário de início (visível quando bot está parado) -->
+      <div id="bot-start-form">
+        <div class="ctrl-field">
+          <label>Modo</label>
+          <select id="rc-mode">
+            <option value="demo">Demo (virtual)</option>
+            <option value="real">Real 💸</option>
+          </select>
+        </div>
+
+        <!-- Aviso do modo real -->
+        <div class="warn-box" id="rc-real-warn" style="display:none">
+          ⚠️ Modo REAL usa dinheiro verdadeiro!
+        </div>
+
+        <!-- Parâmetros avançados -->
+        <details class="ctrl-details">
+          <summary>Parâmetros avançados…</summary>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+            <div class="ctrl-field">
+              <label>Histórico (ticks)</label>
+              <input type="number" id="rc-hist" value="500" min="100" step="100" />
+            </div>
+            <div class="ctrl-field">
+              <label>Mín. p/ treino</label>
+              <input type="number" id="rc-min-ticks" value="500" min="100" step="100" />
+            </div>
+            <div class="ctrl-field">
+              <label>Re-treino (min)</label>
+              <input type="number" id="rc-retrain" value="10" min="1" step="1" />
+            </div>
+            <label class="ctrl-check">
+              <input type="checkbox" id="rc-skip-collect" />
+              Pular coleta (usar CSV existente)
+            </label>
+            <label class="ctrl-check">
+              <input type="checkbox" id="rc-force-retrain" />
+              Forçar re-treino
+            </label>
+            <label class="ctrl-check">
+              <input type="checkbox" id="rc-no-scan" />
+              Sem scan de tendência
+            </label>
+          </div>
+        </details>
+
+        <button class="btn btn-primary full-width" id="btn-start-bot" style="margin-top:6px">
+          ▶ Iniciar Pipeline
+        </button>
+      </div><!-- /bot-start-form -->
+
+      <!-- Botão de Stop (visível quando bot está rodando) -->
+      <button class="btn btn-danger full-width" id="btn-stop-bot" style="display:none">
+        ■ Parar Bot
+      </button>
+
+      <!-- Ação perigosa -->
+      <button class="btn btn-ghost full-width" id="btn-clear-data" style="margin-top:8px">
+        🗑️ Limpar Dados
+      </button>
+
+      <!-- Logout -->
+      <button class="btn btn-ghost full-width" id="btn-logout" style="margin-top:4px">
+        Sair da conta
+      </button>
+    </div><!-- /bot-controls -->
+
+  </aside>
+  <!-- /sidebar -->
+
+
+  <!-- ═══════════════════════════════════════════════════════════
+       MAIN
+  ════════════════════════════════════════════════════════════ -->
+  <div id="main">
+
+    <!-- Tab nav -->
+    <nav id="tab-nav">
+      <button class="tab-btn active" data-tab="overview">Overview</button>
+      <button class="tab-btn" data-tab="historico">Histórico</button>
+      <button class="tab-btn" data-tab="tecnico">Análise Técnica</button>
+      <button class="tab-btn" data-tab="ia-risco">IA & Risco</button>
+    </nav>
+
+    <!-- ── Tab 1: Overview ──────────────────────────────────────── -->
+    <div class="tab-content active" id="tab-overview">
+
+      <!-- KPIs -->
+      <div class="kpi-grid" id="kpi-grid">
+        <div class="kpi-placeholder">Aguardando dados…</div>
+      </div>
+
+      <!-- Curva de saldo -->
+      <div class="chart-card">
+        <div class="chart-title">Curva de Saldo</div>
+        <div id="chart-balance"></div>
+      </div>
+
+      <!-- Últimas operações -->
+      <div class="chart-card">
+        <div class="chart-title">Últimas 20 Operações</div>
+        <div id="recent-table-wrap">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Horário</th>
+                <th>Símbolo</th>
+                <th>Dir.</th>
+                <th>Stake</th>
+                <th>Dur.</th>
+                <th>Res.</th>
+                <th>Lucro</th>
+                <th>Saldo</th>
+              </tr>
+            </thead>
+            <tbody id="recent-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div><!-- /tab-overview -->
+
+
+    <!-- ── Tab 2: Histórico ─────────────────────────────────────── -->
+    <div class="tab-content" id="tab-historico">
+
+      <!-- Filtros -->
+      <div class="filter-bar">
+        <div class="filter-group">
+          <label>Símbolo</label>
+          <select id="f-symbol"><option value="">Todos</option></select>
+        </div>
+        <div class="filter-group">
+          <label>Direção</label>
+          <select id="f-dir">
+            <option value="">Todas</option>
+            <option value="BUY">BUY</option>
+            <option value="SELL">SELL</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>Resultado</label>
+          <select id="f-result">
+            <option value="">Todos</option>
+            <option value="WIN">WIN</option>
+            <option value="LOSS">LOSS</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label>De</label>
+          <input type="date" id="f-date-from" />
+        </div>
+        <div class="filter-group">
+          <label>Até</label>
+          <input type="date" id="f-date-to" />
+        </div>
+        <div class="filter-group filter-group-btn">
+          <button class="btn btn-primary" id="btn-filter">Filtrar</button>
+          <button class="btn btn-secondary" id="btn-clear">Limpar</button>
+        </div>
+      </div>
+
+      <!-- Gráficos -->
+      <div class="chart-row">
+        <div class="chart-card half">
+          <div class="chart-title">Operações por Dia</div>
+          <div id="chart-by-day"></div>
+        </div>
+        <div class="chart-card half">
+          <div class="chart-title">P/L Acumulado</div>
+          <div id="chart-pl-cum"></div>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Confiança IA × Lucro</div>
+        <div id="chart-ai-scatter"></div>
+      </div>
+
+    </div><!-- /tab-historico -->
+
+
+    <!-- ── Tab 3: Análise Técnica ───────────────────────────────── -->
+    <div class="tab-content" id="tab-tecnico">
+
+      <div class="chart-card">
+        <div class="chart-title">Preço · Bollinger · EMA 9/21 · Marcadores WIN/LOSS</div>
+        <div id="chart-price"></div>
+      </div>
+
+      <div class="gauge-row">
+        <div class="chart-card third">
+          <div class="chart-title">RSI</div>
+          <div id="gauge-rsi"></div>
+        </div>
+        <div class="chart-card third">
+          <div class="chart-title">ADX</div>
+          <div id="gauge-adx"></div>
+        </div>
+        <div class="chart-card third">
+          <div class="chart-title">MACD Histograma</div>
+          <div id="gauge-macd"></div>
+        </div>
+      </div>
+
+    </div><!-- /tab-tecnico -->
+
+
+    <!-- ── Tab 4: IA & Risco ────────────────────────────────────── -->
+    <div class="tab-content" id="tab-ia-risco">
+
+      <div class="chart-row">
+        <div class="chart-card half">
+          <div class="chart-title">Win Rate por Faixa de Confiança IA</div>
+          <div id="chart-wr-bin"></div>
+        </div>
+        <div class="chart-card half">
+          <div class="chart-title">WIN/LOSS por Direção</div>
+          <div id="chart-dir-hist"></div>
+        </div>
+      </div>
+
+      <div class="chart-card">
+        <div class="chart-title">Timeline de Risco (Drawdown · Win Rate · Losses Consec.)</div>
+        <div id="chart-risk-timeline"></div>
+      </div>
+
+    </div><!-- /tab-ia-risco -->
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+
+<!-- ══════════════════════════════════════════════════════════════
+     MODAL DE LOGIN
+═══════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="login-modal" style="display:none">
+  <div class="modal-card">
+    <div class="modal-icon">🔐</div>
+    <div class="modal-title">Autenticação</div>
+    <div class="modal-sub">Entre para controlar o bot remotamente</div>
+
+    <!-- Google -->
+    <button class="btn btn-google full-width" id="btn-google-login">
+      <svg width="18" height="18" viewBox="0 0 48 48">
+        <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/>
+        <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/>
+        <path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/>
+        <path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.29-8.16 2.29-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/>
+      </svg>
+      Entrar com Google
+    </button>
+
+    <div class="login-divider">ou</div>
+
+    <div class="modal-field">
+      <label>E-mail</label>
+      <input type="email" id="login-email" placeholder="seu@email.com" autocomplete="email" />
+    </div>
+    <div class="modal-field">
+      <label>Senha</label>
+      <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+    </div>
+
+    <div class="login-error" id="login-error"></div>
+
+    <button class="btn btn-primary full-width" id="btn-do-login">Entrar</button>
+    <button class="btn btn-ghost full-width" id="btn-cancel-login" style="margin-top:6px">Cancelar</button>
+
+    <div class="login-hint">
+      Autenticação via <strong>Firebase</strong>.<br/>
+      Somente usuários autorizados podem operar o bot.
+    </div>
+  </div>
+</div>
+
+
+<script src="/app.js"></script>
+</body>
+</html>

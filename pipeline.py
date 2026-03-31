@@ -7,7 +7,7 @@ Executa e mantém rodando em paralelo:
   2. AGUARDA    — espera MIN_TICKS ticks antes do primeiro treino
   3. DATASET    — constrói dataset.csv via dataset_builder.py
   4. TREINO     — treina e salva model.pkl via train_model.py
-  5. BOT        — inicia o bot de trading (executor.py)
+  5. BOT        — inicia o bot de trading (executor.py)pyth 
   6. RE-TREINO  — a cada N minutos, reconstrói dataset e retreina
                   em background (bot continua operando ininterrupto;
                   o novo model.pkl entra na próxima predição)
