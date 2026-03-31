@@ -68,6 +68,9 @@ class DerivBot:
         # P7: Timestamp da abertura do contrato (detecta contratos travados)
         self._buy_timestamp: float = 0.0
 
+        # P13: Timer de poll ativo — consulta o contrato após duração esperada
+        self._contract_poll_timer: Optional[threading.Timer] = None
+
         # P9: Watchdog de heartbeat (alerta se nenhum tick chegar em N segundos)
         self._watchdog: Optional[threading.Timer] = None
 
@@ -186,6 +189,10 @@ class DerivBot:
                     f"\n[BOT] Contrato {self._open_contract_id} sem resultado "
                     f"após {contract_timeout}s — resetando estado"
                 )
+                # P13: cancelar poll ativo junto com o reset
+                if self._contract_poll_timer is not None:
+                    self._contract_poll_timer.cancel()
+                    self._contract_poll_timer = None
                 self._in_trade = False
                 self._open_contract_id = None
                 self._buy_timestamp = 0.0
@@ -272,6 +279,17 @@ class DerivBot:
                 "subscribe":             1,
             }))
 
+        # P13: Agendar poll ativo caso a subscrição perca o resultado final
+        # (contratos de poucos ticks expiram antes da subscrição ser confirmada)
+        if self._contract_poll_timer is not None:
+            self._contract_poll_timer.cancel()
+        poll_delay = max(self._pending_duration + 2, 5)  # mínimo de 5s
+        self._contract_poll_timer = threading.Timer(
+            poll_delay, self._poll_contract_result, args=[contract_id]
+        )
+        self._contract_poll_timer.daemon = True
+        self._contract_poll_timer.start()
+
     def _handle_contract_update(self, contract: dict) -> None:
         # Ignorar atualizações de contratos anteriores ou de outras subscrições
         if str(contract.get("contract_id", "")) != self._open_contract_id:
@@ -293,6 +311,33 @@ class DerivBot:
         self._in_trade         = False
         self._open_contract_id = None
         self._buy_timestamp    = 0.0  # P7: limpar após contrato encerrado
+
+        # P13: cancelar poll ativo pois resultado já foi recebido
+        if self._contract_poll_timer is not None:
+            self._contract_poll_timer.cancel()
+            self._contract_poll_timer = None
+
+    # ─────────────────────────────────────────────────────────
+    #  P13 — Poll ativo de resultado de contrato
+    # ─────────────────────────────────────────────────────────
+
+    def _poll_contract_result(self, contract_id: str) -> None:
+        """Consulta pontual (sem subscribe) do estado do contrato.
+
+        Disparada após a duração esperada do contrato.  Caso a subscrição
+        passiva tenha perdido o evento `is_sold`, esta consulta garante que
+        `_handle_contract_update` receberá o resultado e desbloqueará o bot.
+        """
+        if self._open_contract_id != contract_id:
+            return  # contrato já encerrado pelo caminho normal
+        ws = self._ws
+        if ws is None:
+            return
+        print(f"\n[BOT] Poll de resultado para contrato {contract_id}...")
+        ws.send(json.dumps({
+            "proposal_open_contract": 1,
+            "contract_id":           int(contract_id),
+        }))
 
     # ─────────────────────────────────────────────────────────
     #  P9 — Watchdog de heartbeat

@@ -33,6 +33,7 @@ const POLL_TICKS    = 4_000;
 const POLL_TRADES   = 15_000;
 const POLL_IND      = 5_000;
 const POLL_MODEL    = 30_000;
+const POLL_LOGS     = 2_000;
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -267,6 +268,8 @@ async function pollBotStatus() {
       text.textContent = 'Rodando' + (d.pid ? ` (PID ${d.pid})` : '');
       btnStart.style.display = 'none';
       btnStop.style.display  = '';
+      el('logBotStatus').textContent = '● Rodando';
+      el('logBotStatus').className   = 'log-stat log-bot-indicator running';
       el('cardStatus').textContent = 'RODANDO';
       el('cardStatus').className   = 'card-value positive';
       el('cardStatusSub').textContent = d.uptime_sec ? fmtUptime(d.uptime_sec) : '—';
@@ -275,6 +278,8 @@ async function pollBotStatus() {
       text.textContent = 'Parado';
       btnStart.style.display = '';
       btnStop.style.display  = 'none';
+      el('logBotStatus').textContent = '● Parado';
+      el('logBotStatus').className   = 'log-stat log-bot-indicator stopped';
       el('cardStatus').textContent = 'PARADO';
       el('cardStatus').className   = 'card-value';
       el('cardStatusSub').textContent = '—';
@@ -725,6 +730,60 @@ async function botStop() {
   }
 }
 
+// ─── Pipeline Logs ───────────────────────────────────────────────────────────
+
+let _allLogLines = [];
+
+async function pollLogs() {
+  try {
+    const r = await fetch('/api/bot/logs');
+    const d = await r.json();
+    _allLogLines = d.lines || [];
+    renderLogs();
+    const logLastFetch = el('logLastFetch');
+    if (logLastFetch) logLastFetch.textContent = 'Atualizado: ' + new Date().toLocaleTimeString('pt-BR');
+    const logLineCount = el('logLineCount');
+    if (logLineCount) logLineCount.textContent = `${_allLogLines.length} linhas`;
+  } catch (_) {}
+}
+
+function renderLogs() {
+  const terminal = el('logTerminal');
+  if (!terminal) return;
+  const filter = (el('logFilter')?.value || '').toLowerCase();
+  const lines = filter
+    ? _allLogLines.filter(l => l.toLowerCase().includes(filter))
+    : _allLogLines;
+  if (!lines.length) {
+    terminal.innerHTML = '<span class="log-empty-msg">Nenhum log disponível. Inicie o bot para ver a saída do pipeline.</span>';
+    return;
+  }
+  terminal.innerHTML = lines.map(line => {
+    const cls = _logLineClass(line);
+    const escaped = line.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<div class="log-line ${cls}">${escaped}</div>`;
+  }).join('');
+  if (el('logAutoScroll')?.checked) terminal.scrollTop = terminal.scrollHeight;
+}
+
+function _logLineClass(line) {
+  if (/erro|error|falha|fail|exception|traceback/i.test(line)) return 'log-err';
+  if (/warn|aviso/i.test(line))                                 return 'log-warn';
+  if (/\[BOT\]|\[PIPELINE\]|\[EXECUTOR\]/i.test(line))         return 'log-bot';
+  if (/\[TREINO\]|\[MODEL\]|train|model\.pkl|accuracy/i.test(line)) return 'log-train';
+  if (/\[DATASET\]|dataset|features/i.test(line))              return 'log-dataset';
+  if (/\[COLETOR\]|ticks|coletando/i.test(line))               return 'log-collect';
+  if (/\[TEND|scan|score=/i.test(line))                        return 'log-scan';
+  return '';
+}
+
+function clearLogs() {
+  _allLogLines = [];
+  renderLogs();
+  const logLineCount = el('logLineCount');
+  if (logLineCount) logLineCount.textContent = '0 linhas';
+}
+
 // ─── Inicialização ────────────────────────────────────────────────────────────
 
 function init() {
@@ -750,6 +809,9 @@ function init() {
   setInterval(pollIndicators, POLL_IND);
   setInterval(pollModel,      POLL_MODEL);
   setInterval(loadHistory,    POLL_TRADES);
+
+  pollLogs();
+  setInterval(pollLogs, POLL_LOGS);
 }
 
 document.addEventListener('DOMContentLoaded', init);

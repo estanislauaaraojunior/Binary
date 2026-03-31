@@ -706,3 +706,38 @@ html, body {
   font-weight: 600;
   letter-spacing: 0.3px;
 }
+
+/* ─── Pipeline Logs Tab ──────────────────────────────────────── */
+.tab-logs { display: none; flex-direction: column; padding: 0 !important; overflow: hidden !important; height: calc(100vh - var(--topbar-h)); }
+.tab-logs.active { display: flex; }
+
+.log-toolbar { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; background: var(--bg-card); border-bottom: 1px solid var(--border); flex-shrink: 0; gap: 12px; flex-wrap: wrap; }
+.log-toolbar-title { font-size: 13px; font-weight: 600; color: var(--text-primary); white-space: nowrap; }
+.log-toolbar-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+
+.log-filter-input { background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px; color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; padding: 5px 10px; width: 180px; outline: none; }
+.log-filter-input:focus { border-color: var(--green); }
+
+.log-autoscroll-label { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; user-select: none; }
+
+.log-statusbar { display: flex; align-items: center; gap: 16px; padding: 5px 20px; background: var(--bg-base); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.log-stat { font-size: 11px; font-family: var(--font-mono); color: var(--text-secondary); }
+.log-bot-indicator.running { color: var(--green); }
+.log-bot-indicator.stopped { color: var(--red-dim); }
+.log-last-fetch { margin-left: auto; }
+
+.log-terminal { flex: 1; overflow-y: auto; padding: 12px 20px; font-family: var(--font-mono); font-size: 12px; line-height: 1.65; background: var(--bg-base); color: var(--text-primary); }
+.log-terminal::-webkit-scrollbar { width: 6px; }
+.log-terminal::-webkit-scrollbar-track { background: transparent; }
+.log-terminal::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 3px; }
+
+.log-empty-msg { color: var(--text-dim); font-style: italic; }
+
+.log-line { padding: 1px 0; white-space: pre-wrap; word-break: break-all; }
+.log-line.log-err     { color: var(--red); }
+.log-line.log-warn    { color: var(--yellow); }
+.log-line.log-bot     { color: var(--green); }
+.log-line.log-train   { color: var(--purple); }
+.log-line.log-dataset { color: var(--blue); }
+.log-line.log-collect { color: var(--text-secondary); }
+.log-line.log-scan    { color: var(--yellow); }

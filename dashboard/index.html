@@ -38,6 +38,10 @@
       <span class="nav-icon">☰</span>
       <span class="nav-label">Histórico</span>
     </li>
+    <li class="nav-item" data-tab="pipeline">
+      <span class="nav-icon">▤</span>
+      <span class="nav-label">Pipeline Logs</span>
+    </li>
   </ul>
 
   <div class="sidebar-footer">
@@ -307,6 +311,29 @@
 
     <div class="hist-summary" id="histSummary"></div>
 
+  </section>
+
+  <!-- ════════════════════ TAB: PIPELINE LOGS ══════════════════ -->
+  <section id="tab-pipeline" class="tab tab-logs">
+    <div class="log-toolbar">
+      <span class="log-toolbar-title">▤ Pipeline — Saída em Tempo Real</span>
+      <div class="log-toolbar-actions">
+        <input type="text" id="logFilter" placeholder="Filtrar linhas..." class="log-filter-input" oninput="renderLogs()" />
+        <label class="log-autoscroll-label">
+          <input type="checkbox" id="logAutoScroll" checked />
+          Auto-scroll
+        </label>
+        <button class="btn btn-outline" onclick="clearLogs()">Limpar</button>
+      </div>
+    </div>
+    <div class="log-statusbar">
+      <span id="logLineCount" class="log-stat">0 linhas</span>
+      <span id="logBotStatus" class="log-stat log-bot-indicator stopped">● Parado</span>
+      <span id="logLastFetch" class="log-stat log-last-fetch">—</span>
+    </div>
+    <div class="log-terminal" id="logTerminal">
+      <span class="log-empty-msg">Nenhum log disponível. Inicie o bot para ver a saída do pipeline.</span>
+    </div>
   </section>
 
 </main>
